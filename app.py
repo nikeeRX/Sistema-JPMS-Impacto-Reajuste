@@ -129,7 +129,7 @@ LOGIN_TEMPLATE = """
 <div class="container" style="max-width: 400px; margin-top: 50px;">
     <div class="header">
         <img src="/logo.png" alt="Logo São Paulo" onerror="this.style.display='none'">
-        <h2>Acesso ao Sistema</h2>
+        <h2>Acesso ao Sistema JPMS</h2>
     </div>
     {% if erro %}
         <p style="color: red; text-align: center;"><b>{{ erro }}</b></p>
