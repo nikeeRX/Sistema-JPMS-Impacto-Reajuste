@@ -14,7 +14,9 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db = SQLAlchemy(app)
 
-# Modelo da Tabela no Banco de Dados (Atualizado para V2)
+# ==========================================
+# TABELAS DO BANCO DE DADOS
+# ==========================================
 class Lancamento(db.Model):
     __tablename__ = 'controle_diario_v2'
     id = db.Column(db.Integer, primary_key=True)
@@ -24,20 +26,30 @@ class Lancamento(db.Model):
     descricao = db.Column(db.String(255), nullable=False)
     valor = db.Column(db.Float, nullable=False)
     
-    # Novos campos para salvar a foto/PDF direto no banco de dados
     comprovante_nome = db.Column(db.String(255), nullable=True)
     comprovante_dados = db.Column(db.LargeBinary, nullable=True)
     comprovante_mimetype = db.Column(db.String(100), nullable=True)
 
-# Cria a tabela se não existir
-with app.app_context():
-    try:
-        db.create_all()
-    except Exception as e:
-        print(f"Aguardando conexão com o banco... {e}")
+class CategoriaItem(db.Model):
+    __tablename__ = 'categorias_lista'
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), unique=True, nullable=False)
 
-# Lista de sugestões extraída da sua foto
-OPCOES_DESCRICAO = [
+class DescricaoItem(db.Model):
+    __tablename__ = 'descricoes_lista'
+    id = db.Column(db.Integer, primary_key=True)
+    nome = db.Column(db.String(100), unique=True, nullable=False)
+
+# ==========================================
+# DADOS INICIAIS (Se o banco estiver vazio)
+# ==========================================
+CATEGORIAS_INICIAIS = [
+    "Faturamento do Dia", "Pagamento Fornecedor", 
+    "Despesas Administrativas", "Tecnologia da Informação", 
+    "Recursos Humanos", "Outros"
+]
+
+DESCRICOES_INICIAIS = [
     "Repasse Couvert", "Contabilidade", "Aluguel", "Aluguel Impressora", 
     "Água", "Água Nagão", "Energia", "Mais Network (Gestão Ifood)", 
     "Marketing", "Nutricionista", "Manutenção Fornos", "Sistema Nyte", 
@@ -45,6 +57,24 @@ OPCOES_DESCRICAO = [
     "Vale-Transporte", "Extras", "Secador mãos", "Dedetização", 
     "INSS", "FGTS", "Juros CH", "SIMPLES"
 ]
+
+# Cria as tabelas e insere os dados iniciais na primeira vez
+with app.app_context():
+    try:
+        db.create_all()
+        # Popula Categorias se estiver vazio
+        if not CategoriaItem.query.first():
+            for cat in CATEGORIAS_INICIAIS:
+                db.session.add(CategoriaItem(nome=cat))
+            db.session.commit()
+            
+        # Popula Descrições se estiver vazio
+        if not DescricaoItem.query.first():
+            for desc in DESCRICOES_INICIAIS:
+                db.session.add(DescricaoItem(nome=desc))
+            db.session.commit()
+    except Exception as e:
+        print(f"Aguardando conexão com o banco... {e}")
 
 # ==========================================
 # INTERFACE HTML/CSS EMBUTIDA
@@ -68,6 +98,10 @@ HTML_TEMPLATE = """
         label { display: block; font-weight: bold; margin-bottom: 5px; color: #000; }
         input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
         
+        .input-btn-group { display: flex; gap: 5px; align-items: center; }
+        .btn-add { background-color: #000; color: white; border: none; padding: 10px 15px; cursor: pointer; font-weight: bold; border-radius: 4px; width: auto; font-size: 16px; }
+        .btn-add:hover { background-color: #333; }
+
         .file-upload-box { background-color: #f9f9f9; border: 2px dashed #ccc; padding: 15px; text-align: center; border-radius: 4px; margin-top: 5px;}
         .file-upload-box input[type="file"] { border: none; background: transparent; padding: 0; }
         
@@ -75,7 +109,8 @@ HTML_TEMPLATE = """
         button:hover { background-color: #A30000; }
         .btn-pdf { background-color: #000; width: auto; margin-bottom: 10px; }
         .btn-pdf:hover { background-color: #333; }
-        .btn-anexo { background-color: #007bff; color: white; padding: 6px 10px; text-decoration: none; border-radius: 4px; font-size: 12px; }
+        
+        .btn-anexo { background-color: #007bff; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 13px; font-weight: bold; display: inline-block; }
         .btn-anexo:hover { background-color: #0056b3; }
         
         table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 14px;}
@@ -85,6 +120,20 @@ HTML_TEMPLATE = """
         .saida { color: #E30613; font-weight: bold; }
         .entrada { color: #000; }
     </style>
+    <script>
+        function adicionarCategoria() {
+            let nova = prompt("Digite o nome da nova Categoria:");
+            if (nova && nova.trim() !== "") {
+                window.location.href = "/nova_categoria?nome=" + encodeURIComponent(nova.trim());
+            }
+        }
+        function adicionarDescricao() {
+            let nova = prompt("Digite a nova Descrição para salvar na lista:");
+            if (nova && nova.trim() !== "") {
+                window.location.href = "/nova_descricao?nome=" + encodeURIComponent(nova.trim());
+            }
+        }
+    </script>
 </head>
 <body>
 
@@ -110,26 +159,29 @@ HTML_TEMPLATE = """
             </div>
             <div>
                 <label>Categoria:</label>
-                <select name="categoria">
-                    <option value="Faturamento do Dia">Faturamento do Dia</option>
-                    <option value="Pagamento Fornecedor">Pagamento Fornecedor</option>
-                    <option value="Despesas Administrativas">Despesas Administrativas</option>
-                    <option value="Tecnologia da Informação">Tecnologia da Informação</option>
-                    <option value="Recursos Humanos">Recursos Humanos</option>
-                    <option value="Outros">Outros</option>
-                </select>
+                <div class="input-btn-group">
+                    <select name="categoria" required>
+                        {% for cat in categorias %}
+                            <option value="{{ cat.nome }}">{{ cat.nome }}</option>
+                        {% endfor %}
+                    </select>
+                    <button type="button" class="btn-add" onclick="adicionarCategoria()">+</button>
+                </div>
             </div>
         </div>
         
         <div class="form-group">
             <div style="flex: 2;">
-                <label>Descrição (Comece a digitar para ver as sugestões):</label>
-                <input list="lista-descricoes" name="descricao" required placeholder="Ex: Conta de Energia">
-                <datalist id="lista-descricoes">
-                    {% for op in opcoes_desc %}
-                        <option value="{{ op }}">
-                    {% endfor %}
-                </datalist>
+                <label>Descrição (Selecione ou adicione uma nova):</label>
+                <div class="input-btn-group">
+                    <input list="lista-descricoes" name="descricao" required placeholder="Ex: Conta de Energia" autocomplete="off">
+                    <datalist id="lista-descricoes">
+                        {% for op in descricoes %}
+                            <option value="{{ op.nome }}">
+                        {% endfor %}
+                    </datalist>
+                    <button type="button" class="btn-add" onclick="adicionarDescricao()">+</button>
+                </div>
             </div>
             <div>
                 <label>Valor (R$):</label>
@@ -139,7 +191,7 @@ HTML_TEMPLATE = """
         
         <div class="form-group">
             <div style="flex: 1;">
-                <label>Comprovante / Foto da Nota (Opcional):</label>
+                <label>Nota / Comprovante (Opcional - Câmera ou Arquivo):</label>
                 <div class="file-upload-box">
                     <input type="file" name="comprovante" accept="image/*,application/pdf">
                 </div>
@@ -163,7 +215,7 @@ HTML_TEMPLATE = """
                     <th>Categoria</th>
                     <th>Descrição</th>
                     <th>Valor</th>
-                    <th>Comprovante</th>
+                    <th>Nota</th>
                 </tr>
             </thead>
             <tbody>
@@ -176,7 +228,7 @@ HTML_TEMPLATE = """
                     <td class="{% if r.tipo == 'Saída' %}saida{% else %}entrada{% endif %}">R$ {{ "%.2f"|format(r.valor) }}</td>
                     <td>
                         {% if r.comprovante_nome %}
-                            <a href="/ver_comprovante/{{ r.id }}" target="_blank" class="btn-anexo">📄 Ver</a>
+                            <a href="/ver_comprovante/{{ r.id }}" target="_blank" class="btn-anexo">📄 Abrir Nota</a>
                         {% else %}
                             -
                         {% endif %}
@@ -200,11 +252,33 @@ HTML_TEMPLATE = """
 def index():
     try:
         lancamentos = Lancamento.query.order_by(Lancamento.id.desc()).all()
+        categorias = CategoriaItem.query.order_by(CategoriaItem.nome).all()
+        descricoes = DescricaoItem.query.order_by(DescricaoItem.nome).all()
     except Exception:
-        lancamentos = []
+        lancamentos, categorias, descricoes = [], [], []
     
     data_hoje = datetime.now().strftime("%d/%m/%Y")
-    return render_template_string(HTML_TEMPLATE, lancamentos=lancamentos, data_hoje=data_hoje, opcoes_desc=OPCOES_DESCRICAO)
+    return render_template_string(HTML_TEMPLATE, lancamentos=lancamentos, categorias=categorias, descricoes=descricoes, data_hoje=data_hoje)
+
+@app.route('/nova_categoria')
+def nova_categoria():
+    nome_cat = request.args.get('nome')
+    if nome_cat:
+        existe = CategoriaItem.query.filter_by(nome=nome_cat).first()
+        if not existe:
+            db.session.add(CategoriaItem(nome=nome_cat))
+            db.session.commit()
+    return redirect(url_for('index'))
+
+@app.route('/nova_descricao')
+def nova_descricao():
+    nome_desc = request.args.get('nome')
+    if nome_desc:
+        existe = DescricaoItem.query.filter_by(nome=nome_desc).first()
+        if not existe:
+            db.session.add(DescricaoItem(nome=nome_desc))
+            db.session.commit()
+    return redirect(url_for('index'))
 
 @app.route('/adicionar', methods=['POST'])
 def adicionar():
@@ -218,7 +292,6 @@ def adicionar():
     except ValueError:
         valor = 0.0
 
-    # Lida com o upload do arquivo
     arquivo = request.files.get('comprovante')
     comprovante_nome = None
     comprovante_dados = None
@@ -227,7 +300,7 @@ def adicionar():
     if arquivo and arquivo.filename != '':
         comprovante_nome = secure_filename(arquivo.filename)
         comprovante_mimetype = arquivo.mimetype
-        comprovante_dados = arquivo.read() # Salva o binário puro da foto
+        comprovante_dados = arquivo.read()
     
     novo_lancamento = Lancamento(
         data=data, tipo=tipo, categoria=categoria, 
@@ -240,19 +313,24 @@ def adicionar():
     db.session.add(novo_lancamento)
     db.session.commit()
     
+    # Salva a descrição no banco caso o usuário tenha digitado uma nova mas não usou o botão de "+"
+    existe_desc = DescricaoItem.query.filter_by(nome=descricao).first()
+    if not existe_desc and descricao.strip() != "":
+        db.session.add(DescricaoItem(nome=descricao.strip()))
+        db.session.commit()
+        
     return redirect(url_for('index'))
 
 @app.route('/ver_comprovante/<int:id_lancamento>')
 def ver_comprovante(id_lancamento):
-    # Rota que puxa a foto do banco de dados e mostra na tela
     lancamento = Lancamento.query.get_or_404(id_lancamento)
     if not lancamento.comprovante_dados:
-        return "Nenhum comprovante anexado a este lançamento.", 404
+        return "Nenhuma nota anexada a este lançamento.", 404
         
     return send_file(
         io.BytesIO(lancamento.comprovante_dados),
         mimetype=lancamento.comprovante_mimetype,
-        as_attachment=False,
+        as_attachment=False, 
         download_name=lancamento.comprovante_nome
     )
 
