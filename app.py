@@ -110,14 +110,14 @@ CSS_PADRAO = """
     }
 """
 
-LOGIN_TEMPLATE = f"""
+LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Login - Controle Financeiro</title>
-    <style>{CSS_PADRAO}</style>
+    <style>""" + CSS_PADRAO + """</style>
 </head>
 <body>
 <div class="container" style="max-width: 400px; margin-top: 50px;">
@@ -144,27 +144,27 @@ LOGIN_TEMPLATE = f"""
 </html>
 """
 
-HTML_TEMPLATE = f"""
+HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Controle Financeiro - São Paulo</title>
-    <style>{CSS_PADRAO}</style>
+    <style>""" + CSS_PADRAO + """</style>
     <script>
-        function adicionarCategoria() {{
+        function adicionarCategoria() {
             let nova = prompt("Digite o nome da nova Categoria:");
-            if (nova && nova.trim() !== "") {{
+            if (nova && nova.trim() !== "") {
                 window.location.href = "/nova_categoria?nome=" + encodeURIComponent(nova.trim());
-            }}
-        }}
-        function adicionarDescricao() {{
+            }
+        }
+        function adicionarDescricao() {
             let nova = prompt("Digite a nova Descrição para salvar na lista:");
-            if (nova && nova.trim() !== "") {{
+            if (nova && nova.trim() !== "") {
                 window.location.href = "/nova_descricao?nome=" + encodeURIComponent(nova.trim());
-            }}
-        }}
+            }
+        }
     </script>
 </head>
 <body>
@@ -296,14 +296,14 @@ HTML_TEMPLATE = f"""
 </html>
 """
 
-EDITAR_TEMPLATE = f"""
+EDITAR_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Editar Lançamento</title>
-    <style>{CSS_PADRAO}</style>
+    <style>""" + CSS_PADRAO + """</style>
 </head>
 <body>
 <div class="container">
@@ -348,7 +348,6 @@ EDITAR_TEMPLATE = f"""
 
 @app.before_request
 def verificar_login():
-    # Bloqueia rotas se não estiver logado
     rotas_livres = ['/login', '/logo.png']
     if request.path not in rotas_livres and 'usuario' not in session:
         return redirect(url_for('login'))
