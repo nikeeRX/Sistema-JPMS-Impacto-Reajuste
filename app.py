@@ -71,7 +71,7 @@ CSS_PADRAO = """
     .form-group { display: flex; flex-wrap: wrap; gap: 15px; margin-bottom: 15px; }
     .form-group div { flex: 1; min-width: 150px; }
     label { display: block; font-weight: bold; margin-bottom: 5px; color: #000; }
-    input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; height: 44px; }
+    input, select { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; height: 44px; font-size: 15px;}
     
     .input-btn-group { display: flex; gap: 5px; align-items: center; width: 100%; }
     .btn-add { background-color: #000; color: white; border: none; cursor: pointer; font-weight: bold; border-radius: 4px; width: 50px; height: 44px; font-size: 18px; display: flex; align-items: center; justify-content: center; }
@@ -100,13 +100,19 @@ CSS_PADRAO = """
     .user-panel { display: flex; justify-content: space-between; align-items: center; background: #eee; padding: 10px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; }
     .user-panel a { color: #E30613; text-decoration: none; }
 
+    /* Ajustes para a nova caixa de busca do Select2 */
+    .select2-container .select2-selection--single { height: 44px !important; border: 1px solid #ccc !important; border-radius: 4px !important; padding-top: 6px !important; font-size: 15px; }
+    .select2-container--default .select2-selection--single .select2-selection__arrow { height: 42px !important; }
+    .select2-container--default .select2-selection--single .select2-selection__rendered { color: #000 !important; line-height: 30px !important; }
+
     /* AJUSTES PARA MOBILE */
     @media (max-width: 600px) {
         .form-group { flex-direction: column; gap: 10px; }
         .input-btn-group select, .input-btn-group input { flex-grow: 1; }
+        .select2-container { width: 100% !important; flex-grow: 1; }
         table { font-size: 11px; }
         th, td { padding: 6px; }
-        button { font-size: 16px; height: 50px; } /* Botões maiores para dedo */
+        button { font-size: 16px; height: 50px; }
     }
 """
 
@@ -151,6 +157,11 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Controle Financeiro - São Paulo</title>
+    
+    <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
+
     <style>""" + CSS_PADRAO + """</style>
     <script>
         function adicionarCategoria() {
@@ -165,6 +176,19 @@ HTML_TEMPLATE = """
                 window.location.href = "/nova_descricao?nome=" + encodeURIComponent(nova.trim());
             }
         }
+
+        // Inicializa as caixas suspensas com busca (Select2)
+        $(document).ready(function() {
+            $('.caixa-busca').select2({
+                placeholder: "Clique ou digite para buscar...",
+                width: '100%',
+                language: {
+                    noResults: function() {
+                        return "Nenhuma descrição encontrada";
+                    }
+                }
+            });
+        });
     </script>
 </head>
 <body>
@@ -211,14 +235,14 @@ HTML_TEMPLATE = """
         
         <div class="form-group">
             <div style="flex: 2;">
-                <label>Descrição (Selecione ou digite):</label>
+                <label>Descrição (Selecione ou digite para buscar):</label>
                 <div class="input-btn-group">
-                    <input list="lista-descricoes" name="descricao" required placeholder="Ex: Conta de Energia" autocomplete="off">
-                    <datalist id="lista-descricoes">
+                    <select class="caixa-busca" name="descricao" required>
+                        <option value="" disabled selected></option>
                         {% for op in descricoes %}
-                            <option value="{{ op.nome }}">
+                            <option value="{{ op.nome }}">{{ op.nome }}</option>
                         {% endfor %}
-                    </datalist>
+                    </select>
                     {% if session['usuario'] == 'admin' %}
                         <button type="button" class="btn-add" onclick="adicionarDescricao()">+</button>
                     {% endif %}
@@ -413,12 +437,6 @@ def adicionar():
         comprovante_mimetype=comprovante_mimetype
     )
     db.session.add(novo_lancamento)
-    
-    if session.get('usuario') == 'admin':
-        existe_desc = DescricaoItem.query.filter_by(nome=descricao).first()
-        if not existe_desc and descricao.strip() != "":
-            db.session.add(DescricaoItem(nome=descricao.strip()))
-
     db.session.commit()
     return redirect(url_for('index'))
 
