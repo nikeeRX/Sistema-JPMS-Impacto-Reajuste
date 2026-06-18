@@ -1,6 +1,7 @@
 import os
 import io
-from flask import Flask, request, redirect, url_for, send_file, render_template_string, session, flash
+import csv
+from flask import Flask, request, redirect, url_for, send_file, render_template_string, session, Response
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from fpdf import FPDF
@@ -8,10 +9,10 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-# Chave de segurança obrigatória para o sistema de Login
+# Chave de segurança
 app.secret_key = 'chave_super_secreta_pizzaria_sp'
 
-# Conexão com o banco PostgreSQL na Railway
+# Conexão com o banco PostgreSQL
 app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://postgres:FKCizxbIlDRCIzeewkKvmlFRBIEMLGgZ@postgres.railway.internal:5432/railway'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
@@ -51,6 +52,15 @@ class DescricaoItem(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nome = db.Column(db.String(100), unique=True, nullable=False)
 
+# Nova tabela para Logs de Edição
+class LogEdicao(db.Model):
+    __tablename__ = 'logs_edicao'
+    id = db.Column(db.Integer, primary_key=True)
+    lancamento_id = db.Column(db.Integer, nullable=False)
+    usuario = db.Column(db.String(50), nullable=False)
+    data_hora = db.Column(db.String(20), nullable=False)
+    detalhes = db.Column(db.Text, nullable=False)
+
 with app.app_context():
     try:
         db.create_all()
@@ -58,9 +68,8 @@ with app.app_context():
         print(f"Aguardando conexão... {e}")
 
 # ==========================================
-# TEMPLATES HTML/CSS (LOGIN, PRINCIPAL, EDITAR)
+# CSS PADRÃO
 # ==========================================
-
 CSS_PADRAO = """
     body { font-family: Arial, sans-serif; background-color: #f4f4f9; margin: 0; padding: 10px; }
     .container { max-width: 950px; margin: 0 auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
@@ -82,8 +91,7 @@ CSS_PADRAO = """
     
     button { background-color: #E30613; color: white; border: none; padding: 12px 20px; cursor: pointer; font-weight: bold; border-radius: 4px; transition: 0.3s; font-size: 15px; width: 100%; height: 48px; }
     button:hover { background-color: #A30000; }
-    .btn-pdf { background-color: #000; width: auto; margin-bottom: 10px; }
-    .btn-pdf:hover { background-color: #333; }
+    .btn-acao-top { width: auto; margin-bottom: 10px; }
     
     .btn-acao { color: white; padding: 6px 10px; text-decoration: none; border-radius: 4px; font-size: 12px; font-weight: bold; display: inline-block; margin: 2px; border: none; cursor: pointer; }
     .btn-anexo { background-color: #007bff; }
@@ -97,15 +105,13 @@ CSS_PADRAO = """
     .saida { color: #E30613; font-weight: bold; }
     .entrada { color: #000; }
     
-    .user-panel { display: flex; justify-content: space-between; align-items: center; background: #eee; padding: 10px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; }
+    .user-panel { display: flex; justify-content: space-between; align-items: center; background: #eee; padding: 10px; border-radius: 4px; margin-bottom: 20px; font-weight: bold; flex-wrap: wrap; gap: 10px;}
     .user-panel a { color: #E30613; text-decoration: none; }
 
-    /* Ajustes para a nova caixa de busca do Select2 */
     .select2-container .select2-selection--single { height: 44px !important; border: 1px solid #ccc !important; border-radius: 4px !important; padding-top: 6px !important; font-size: 15px; }
     .select2-container--default .select2-selection--single .select2-selection__arrow { height: 42px !important; }
     .select2-container--default .select2-selection--single .select2-selection__rendered { color: #000 !important; line-height: 30px !important; }
 
-    /* AJUSTES PARA MOBILE */
     @media (max-width: 600px) {
         .form-group { flex-direction: column; gap: 10px; }
         .input-btn-group select, .input-btn-group input { flex-grow: 1; }
@@ -116,6 +122,9 @@ CSS_PADRAO = """
     }
 """
 
+# ==========================================
+# TEMPLATES HTML
+# ==========================================
 LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="pt-BR">
@@ -129,7 +138,7 @@ LOGIN_TEMPLATE = """
 <div class="container" style="max-width: 400px; margin-top: 50px;">
     <div class="header">
         <img src="/logo.png" alt="Logo São Paulo" onerror="this.style.display='none'">
-        <h2>Acesso ao Sistema JPMS</h2>
+        <h2>Acesso ao Sistema</h2>
     </div>
     {% if erro %}
         <p style="color: red; text-align: center;"><b>{{ erro }}</b></p>
@@ -157,11 +166,9 @@ HTML_TEMPLATE = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Controle Financeiro - São Paulo</title>
-    
     <link href="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/css/select2.min.css" rel="stylesheet" />
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/select2@4.1.0-rc.0/dist/js/select2.min.js"></script>
-
     <style>""" + CSS_PADRAO + """</style>
     <script>
         function adicionarCategoria() {
@@ -176,27 +183,25 @@ HTML_TEMPLATE = """
                 window.location.href = "/nova_descricao?nome=" + encodeURIComponent(nova.trim());
             }
         }
-
-        // Inicializa as caixas suspensas com busca (Select2)
         $(document).ready(function() {
             $('.caixa-busca').select2({
                 placeholder: "Clique ou digite para buscar...",
                 width: '100%',
-                language: {
-                    noResults: function() {
-                        return "Nenhuma descrição encontrada";
-                    }
-                }
+                language: { noResults: function() { return "Nenhuma descrição encontrada"; } }
             });
         });
     </script>
 </head>
 <body>
-
 <div class="container">
     <div class="user-panel">
         <span>Logado como: <span style="color:#E30613;">{{ session['usuario'].upper() }}</span></span>
-        <a href="/logout">🚪 Sair do Sistema</a>
+        <div>
+            {% if session['usuario'] == 'admin' %}
+            <a href="/logs" style="margin-right: 15px; color: #000;">📋 Ver Auditoria</a>
+            {% endif %}
+            <a href="/logout">🚪 Sair do Sistema</a>
+        </div>
     </div>
 
     <div class="header">
@@ -262,13 +267,15 @@ HTML_TEMPLATE = """
                 </div>
             </div>
         </div>
-        
         <button type="submit">Salvar Registro</button>
     </form>
 
     <h2 style="margin-top: 40px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         Histórico
-        <a href="/gerar_pdf"><button type="button" class="btn-pdf">Gerar PDF</button></a>
+        <div style="display: flex; gap: 5px;">
+            <a href="/exportar_csv"><button type="button" class="btn-acao-top" style="background-color: #217346; color: white;">📊 Excel (CSV)</button></a>
+            <a href="/gerar_pdf"><button type="button" class="btn-acao-top" style="background-color: #000; color: white;">📄 Gerar PDF</button></a>
+        </div>
     </h2>
     
     <div style="overflow-x: auto;">
@@ -281,9 +288,7 @@ HTML_TEMPLATE = """
                     <th>Descrição</th>
                     <th>Valor</th>
                     <th>Nota</th>
-                    {% if session['usuario'] == 'admin' %}
                     <th>Ações</th>
-                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -301,21 +306,21 @@ HTML_TEMPLATE = """
                             -
                         {% endif %}
                     </td>
-                    {% if session['usuario'] == 'admin' %}
                     <td style="min-width: 100px;">
                         <a href="/editar/{{ r.id }}" class="btn-acao btn-editar">✏️</a>
+                        
+                        {% if session['usuario'] == 'admin' %}
                         <form action="/deletar/{{ r.id }}" method="POST" style="display:inline;" onsubmit="return confirm('Tem certeza que deseja excluir?');">
                             <button type="submit" class="btn-acao btn-excluir">🗑️</button>
                         </form>
+                        {% endif %}
                     </td>
-                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
 </div>
-
 </body>
 </html>
 """
@@ -366,6 +371,52 @@ EDITAR_TEMPLATE = """
 </html>
 """
 
+LOGS_TEMPLATE = """
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Auditoria - Logs de Edição</title>
+    <style>""" + CSS_PADRAO + """</style>
+</head>
+<body>
+<div class="container">
+    <h2>Logs de Edição (Auditoria)</h2>
+    <div style="margin-bottom: 20px;">
+        <a href="/"><button type="button" style="background: #000; width: auto;">⬅ Voltar ao Início</button></a>
+    </div>
+    
+    <div style="overflow-x: auto;">
+        <table>
+            <thead>
+                <tr>
+                    <th>Data/Hora</th>
+                    <th>Usuário</th>
+                    <th>ID Lançamento</th>
+                    <th>Detalhes da Alteração (De -> Para)</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in logs %}
+                <tr>
+                    <td style="white-space: nowrap;">{{ log.data_hora }}</td>
+                    <td style="font-weight: bold; color: #E30613;">{{ log.usuario.upper() }}</td>
+                    <td>{{ log.lancamento_id }}</td>
+                    <td>{{ log.detalhes }}</td>
+                </tr>
+                {% endfor %}
+                {% if not logs %}
+                <tr><td colspan="4" style="text-align:center;">Nenhuma edição foi registrada ainda.</td></tr>
+                {% endif %}
+            </tbody>
+        </table>
+    </div>
+</div>
+</body>
+</html>
+"""
+
 # ==========================================
 # ROTAS DO SISTEMA
 # ==========================================
@@ -381,13 +432,11 @@ def login():
     if request.method == 'POST':
         user = request.form.get('usuario')
         senha = request.form.get('senha')
-        
         if user in USUARIOS and USUARIOS[user] == senha:
             session['usuario'] = user
             return redirect(url_for('index'))
         else:
             return render_template_string(LOGIN_TEMPLATE, erro="Usuário ou senha incorretos!")
-            
     return render_template_string(LOGIN_TEMPLATE, erro=None)
 
 @app.route('/logout')
@@ -403,7 +452,6 @@ def index():
         descricoes = DescricaoItem.query.order_by(DescricaoItem.nome).all()
     except Exception:
         lancamentos, categorias, descricoes = [], [], []
-    
     data_hoje = datetime.now().strftime("%d/%m/%Y")
     return render_template_string(HTML_TEMPLATE, lancamentos=lancamentos, categorias=categorias, descricoes=descricoes, data_hoje=data_hoje)
 
@@ -413,30 +461,21 @@ def adicionar():
     tipo = request.form.get('tipo')
     categoria = request.form.get('categoria')
     descricao = request.form.get('descricao')
-    
     try:
         valor = float(request.form.get('valor').replace(',', '.'))
     except ValueError:
         valor = 0.0
 
     arquivo = request.files.get('comprovante')
-    comprovante_nome = None
-    comprovante_dados = None
-    comprovante_mimetype = None
-
+    comp_nome, comp_dados, comp_mime = None, None, None
     if arquivo and arquivo.filename != '':
-        comprovante_nome = secure_filename(arquivo.filename)
-        comprovante_mimetype = arquivo.mimetype
-        comprovante_dados = arquivo.read()
+        comp_nome = secure_filename(arquivo.filename)
+        comp_mime = arquivo.mimetype
+        comp_dados = arquivo.read()
     
-    novo_lancamento = Lancamento(
-        data=data, tipo=tipo, categoria=categoria, 
-        descricao=descricao, valor=valor,
-        comprovante_nome=comprovante_nome,
-        comprovante_dados=comprovante_dados,
-        comprovante_mimetype=comprovante_mimetype
-    )
-    db.session.add(novo_lancamento)
+    novo = Lancamento(data=data, tipo=tipo, categoria=categoria, descricao=descricao, valor=valor,
+                      comprovante_nome=comp_nome, comprovante_dados=comp_dados, comprovante_mimetype=comp_mime)
+    db.session.add(novo)
     db.session.commit()
     return redirect(url_for('index'))
 
@@ -450,24 +489,83 @@ def deletar(id):
 
 @app.route('/editar/<int:id>')
 def editar(id):
-    if session.get('usuario') != 'admin':
-        return redirect(url_for('index'))
+    # Agora financeiro também pode ver a tela de edição
     lancamento = Lancamento.query.get_or_404(id)
     return render_template_string(EDITAR_TEMPLATE, lancamento=lancamento)
 
 @app.route('/atualizar/<int:id>', methods=['POST'])
 def atualizar(id):
-    if session.get('usuario') == 'admin':
-        lancamento = Lancamento.query.get_or_404(id)
-        lancamento.data = request.form.get('data')
-        lancamento.tipo = request.form.get('tipo')
-        lancamento.descricao = request.form.get('descricao')
-        try:
-            lancamento.valor = float(request.form.get('valor').replace(',', '.'))
-        except ValueError:
-            pass
+    lancamento = Lancamento.query.get_or_404(id)
+    
+    # Salva os valores antigos para o LOG
+    val_antigo = {
+        'data': lancamento.data,
+        'tipo': lancamento.tipo,
+        'descricao': lancamento.descricao,
+        'valor': lancamento.valor
+    }
+    
+    # Pega os novos valores
+    nova_data = request.form.get('data')
+    novo_tipo = request.form.get('tipo')
+    nova_desc = request.form.get('descricao')
+    try:
+        novo_valor = float(request.form.get('valor').replace(',', '.'))
+    except ValueError:
+        novo_valor = val_antigo['valor']
+
+    # Verifica o que mudou
+    mudancas = []
+    if val_antigo['data'] != nova_data: mudancas.append(f"Data: {val_antigo['data']} -> {nova_data}")
+    if val_antigo['tipo'] != novo_tipo: mudancas.append(f"Tipo: {val_antigo['tipo']} -> {novo_tipo}")
+    if val_antigo['descricao'] != nova_desc: mudancas.append(f"Descrição: {val_antigo['descricao']} -> {nova_desc}")
+    if val_antigo['valor'] != novo_valor: mudancas.append(f"Valor: R${val_antigo['valor']} -> R${novo_valor}")
+
+    # Se teve mudança, aplica no banco e gera o LOG
+    if mudancas:
+        lancamento.data = nova_data
+        lancamento.tipo = novo_tipo
+        lancamento.descricao = nova_desc
+        lancamento.valor = novo_valor
+        
+        log = LogEdicao(
+            lancamento_id=lancamento.id,
+            usuario=session['usuario'],
+            data_hora=datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+            detalhes=" | ".join(mudancas)
+        )
+        db.session.add(log)
         db.session.commit()
+
     return redirect(url_for('index'))
+
+@app.route('/logs')
+def logs():
+    if session.get('usuario') != 'admin':
+        return redirect(url_for('index'))
+    logs_bd = LogEdicao.query.order_by(LogEdicao.id.desc()).all()
+    return render_template_string(LOGS_TEMPLATE, logs=logs_bd)
+
+@app.route('/exportar_csv')
+def exportar_csv():
+    lancamentos = Lancamento.query.order_by(Lancamento.id.desc()).all()
+    si = io.StringIO()
+    # Usa ponto e vírgula para abrir automático no Excel em português
+    cw = csv.writer(si, delimiter=';')
+    cw.writerow(['ID', 'Data', 'Tipo', 'Categoria', 'Descricao', 'Valor (R$)'])
+    
+    for r in lancamentos:
+        # Troca o ponto pela vírgula para o Excel entender como moeda nativa
+        valor_br = f"{r.valor:.2f}".replace('.', ',')
+        cw.writerow([r.id, r.data, r.tipo, r.categoria, r.descricao, valor_br])
+    
+    # O encode utf-8-sig garante que acentos fiquem corretos no Excel da Microsoft
+    output = si.getvalue().encode('utf-8-sig')
+    return Response(
+        output,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment;filename=Exportacao_Financeiro_{datetime.now().strftime('%d%m%Y_%H%M')}.csv"}
+    )
 
 @app.route('/nova_categoria')
 def nova_categoria():
@@ -490,8 +588,7 @@ def nova_descricao():
 @app.route('/ver_comprovante/<int:id>')
 def ver_comprovante(id):
     lancamento = Lancamento.query.get_or_404(id)
-    if not lancamento.comprovante_dados:
-        return "Nenhuma nota anexada.", 404
+    if not lancamento.comprovante_dados: return "Nenhuma nota anexada.", 404
     return send_file(io.BytesIO(lancamento.comprovante_dados), mimetype=lancamento.comprovante_mimetype, as_attachment=False, download_name=lancamento.comprovante_nome)
 
 @app.route('/logo.png')
