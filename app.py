@@ -4,22 +4,17 @@ from flask import Flask, request, render_template_string, redirect, url_for, fla
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
-# Carrega a senha do banco se estiver rodando localmente (no .env)
 load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = "chave_secreta_super_segura_gered"
 
-# Conexão blindada com o PostgreSQL (Railway)
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 engine = create_engine(DATABASE_URL)
 
-# =====================================================================
-# CSS E HTML EMBUTIDOS 
-# =====================================================================
 CSS_PADRAO = """
 <style>
     :root { --azul-escuro: #12283f; --verde-ok: #006400; --vermelho-alerta: #cc0000; --fundo: #f4f7f6; }
@@ -149,13 +144,8 @@ HTML_ADMIN = CSS_PADRAO + """
 </div>
 """
 
-# =====================================================================
-# ROTAS DA APLICAÇÃO
-# =====================================================================
-
 @app.route('/')
 def dashboard():
-    # Dados mockados temporários para visualização do layout aprovado
     dados_mock = {
         'prestador_nome': 'Hospital Geral Misto',
         'periodo_base': 'Abril/2026',
@@ -194,7 +184,6 @@ def admin_upload():
         return redirect(url_for('admin'))
 
     try:
-        # Lê o arquivo
         if arquivo.filename.endswith('.parquet'):
             df = pd.read_parquet(arquivo)
         elif arquivo.filename.endswith('.csv'):
@@ -205,12 +194,11 @@ def admin_upload():
             flash("Formato não suportado. Use Parquet, CSV ou Excel.")
             return redirect(url_for('admin'))
 
-        # Regra de extração: Garantir que UF e AP não se percam
+        # Lógicas de correções
         for col in ['UF', 'AP']:
             if col not in df.columns:
                 df[col] = None
         
-        # Regra de negócio: Totalizar VLR_DESCONTO_OBTIDO na primeira linha
         if 'VLR_DESCONTO_OBTIDO' in df.columns:
             df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
             total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
@@ -218,7 +206,6 @@ def admin_upload():
             if not df.empty:
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = total_desconto
 
-        # Inserção no PostgreSQL
         if tipo_base == 'faturamento':
             if competencia:
                 df['COMPETENCIA'] = competencia
@@ -233,7 +220,4 @@ def admin_upload():
 
     return redirect(url_for('admin'))
 
-if __name__ == '__main__':
-    # Configuração dinâmica de porta exigida pelo Railway
-    porta = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=porta)
+# CÓDIGO DO APP.RUN REMOVIDO PROPOSITALMENTE PARA FORÇAR O GUNICORN!
