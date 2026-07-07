@@ -18,7 +18,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 engine = create_engine(DATABASE_URL)
 
 # =====================================================================
-# CSS E HTML EMBUTIDOS ----
+# CSS E HTML EMBUTIDOS 
 # =====================================================================
 CSS_PADRAO = """
 <style>
