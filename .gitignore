@@ -1,3 +1,22 @@
+# ==========================================
+# ARQUIVOS DE SEGURANÇA (NÃO APAGUE)
+# ==========================================
+# Protege a sua senha do PostgreSQL
 .env
+
+# ==========================================
+# LIXO DO PYTHON E SISTEMA
+# ==========================================
+# Impede o GitHub de ficar poluído com arquivos inúteis
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# Ambientes virtuais (caso você use na sua máquina)
+venv/
+env/
+
+# Arquivos invisíveis do Windows/Mac
+Thumbs.db
+.DS_Store
