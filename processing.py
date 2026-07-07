@@ -36,16 +36,11 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         df["DESCRICAO_EVENTO"] = df[ds_col].fillna("").astype(str) if ds_col else ""
         df["_COD_LIMPO_"] = df[ev_col].fillna("").astype(str).apply(normalize_id_digits) if ev_col else ""
         
-        # 1. EXCEÇÕES (Maior prioridade)
         if itens_excecao:
             ex_l = [str(x).strip() for x in itens_excecao]
             df["ORIGEM"] = np.where(df["_COD_LIMPO_"].isin(ex_l), "Item Específico", "Pendente")
-        else: 
-            df["ORIGEM"] = "Pendente"
+        else: df["ORIGEM"] = "Pendente"
 
-        # ---------------------------------------------------------
-        # 2. VERIFICAR DOTAÇÃO (Código específico)
-        # ---------------------------------------------------------
         mask = (df["ORIGEM"] == "Pendente")
         if mask.any() and df_dot is not None and not df_dot.empty:
             df_d = df_dot.copy()
@@ -58,47 +53,9 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
             df["CHAVE"] = df["_COD_LIMPO_"] + "-" + df["DESCRICAO_EVENTO"].apply(_limpar_texto_chave)
             df_d["CHAVE_DOT"] = df_d[d_ev].fillna("").astype(str).apply(normalize_id_digits) + "-" + df_d[d_ds].fillna("").astype(str).apply(_limpar_texto_chave)
             dot_keys = set(df_d["CHAVE_DOT"].unique())
-            
-            df.loc[mask, "ORIGEM"] = np.where(df.loc[mask, "CHAVE"].isin(dot_keys), "Dotação", "Pendente")
+            df.loc[mask, "ORIGEM"] = np.where(df.loc[mask, "CHAVE"].isin(dot_keys), "Dotação", "Faixa de Evento")
+        else: df.loc[mask, "ORIGEM"] = "Faixa de Evento"
 
-        # ---------------------------------------------------------
-        # 3. VERIFICAR FAIXA DE EVENTOS (Intervalos numéricos)
-        # ---------------------------------------------------------
-        mask = (df["ORIGEM"] == "Pendente")
-        if mask.any() and df_fai is not None and not df_fai.empty:
-            ini_col = _find_column(df_fai, ["EV_INI_ESTRUTURA", "EV_INICIO_ESTRUTURA", "EV_INI", "INI"])
-            fim_col = _find_column(df_fai, ["EV_FIM_ESTRUTURA", "EV_FIM", "FIM"])
-            
-            if ini_col and fim_col:
-                # Transforma colunas de limite em numérico para garantir a comparação
-                df_fai["_INI_NUM_"] = pd.to_numeric(df_fai[ini_col].astype(str).apply(normalize_id_digits), errors='coerce')
-                df_fai["_FIM_NUM_"] = pd.to_numeric(df_fai[fim_col].astype(str).apply(normalize_id_digits), errors='coerce')
-                df_fai_valid = df_fai.dropna(subset=["_INI_NUM_", "_FIM_NUM_"])
-                
-                df["_COD_NUM_"] = pd.to_numeric(df["_COD_LIMPO_"], errors='coerce')
-                
-                # Verifica se o código do faturamento cai dentro de alguma das faixas
-                def in_faixa(val):
-                    if pd.isna(val): return False
-                    return ((df_fai_valid["_INI_NUM_"] <= val) & (val <= df_fai_valid["_FIM_NUM_"])).any()
-                
-                mask_pendente = df["ORIGEM"] == "Pendente"
-                df.loc[mask_pendente, "ORIGEM"] = np.where(df.loc[mask_pendente, "_COD_NUM_"].apply(in_faixa), "Faixa de Evento", "Pendente")
-                df.drop(columns=["_COD_NUM_"], inplace=True)
-
-        # ---------------------------------------------------------
-        # 4. O QUE SOBRAR VIRA FAIXA DE EVENTO (PADRÃO)
-        # ---------------------------------------------------------
-        mask = (df["ORIGEM"] == "Pendente")
-        if mask.any():
-            df.loc[mask, "ORIGEM"] = "Faixa de Evento" 
-
-        # Limpa as colunas temporárias
-        df.drop(columns=["CHAVE"], errors="ignore", inplace=True)
-
-        # ---------------------------------------------------------
-        # CLASSIFICAÇÃO DE TIPO DE DESPESA
-        # ---------------------------------------------------------
         def get_ref_codes(rdf, is_dieta=False):
             if rdf is None or rdf.empty: return set()
             c = _find_column(rdf, ["ESTRUTURA", "CODIGO", "EVENTOS"]) if is_dieta else _find_column(rdf, ["EVENTOS", "EVENTO", "ESTRUTURA"])
@@ -115,7 +72,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         df.loc[df["_COD_LIMPO_"].isin(s_diet) & (df["_COD_LIMPO_"] != ""), "TIPO_DESPESA_FINAL"] = "DIETAS"
         df.loc[df["_COD_LIMPO_"].isin(s_perf) & (df["_COD_LIMPO_"] != "") & (df["TIPO_DESPESA_FINAL"] != "DIETAS"), "TIPO_DESPESA_FINAL"] = "PERFUROCORTANTES"
         
-        return df.drop(columns=["_COD_LIMPO_"], errors="ignore")
+        return df.drop(columns=["CHAVE", "_COD_LIMPO_"], errors="ignore")
     except:
         traceback.print_exc()
         return pd.DataFrame()
