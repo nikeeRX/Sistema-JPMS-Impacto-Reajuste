@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =====================================================================
-# CONSTANTES GLOBAIS
+# CONSTANTES GLOBAIS ---
 # =====================================================================
 COL_EVENTO = 'EVENTO'
 COL_VALOR_PAGO = 'VALOR_PAG'
