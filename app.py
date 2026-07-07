@@ -2,17 +2,23 @@ import os
 import pandas as pd
 from flask import Flask, request, render_template_string, redirect, url_for, flash
 from sqlalchemy import create_engine
+from dotenv import load_dotenv
+
+# Carrega a senha do banco se estiver rodando localmente (no .env)
+load_dotenv()
 
 app = Flask(__name__)
 app.secret_key = "chave_secreta_super_segura_gered"
 
-# Conexão com o Banco de Dados no Railway
-# Você vai pegar essa URL lá no painel do Railway (Postgres)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://usuario:senha@host:porta/banco")
+# Conexão blindada com o PostgreSQL (Railway)
+DATABASE_URL = os.getenv("DATABASE_URL")
+if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
 engine = create_engine(DATABASE_URL)
 
 # =====================================================================
-# CSS E HTML EMBUTIDOS (O novo padrão visual do BI)
+# CSS E HTML EMBUTIDOS 
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -27,13 +33,10 @@ CSS_PADRAO = """
     .metric-box .valor { font-size: 1.5em; font-weight: bold; color: var(--azul-escuro); margin-bottom: 5px; }
     .metric-box .sub { font-size: 0.85em; color: #888; }
     .impacto-card { background-color: #fcf8e3; border-top: 4px solid var(--vermelho-alerta); }
-    
-    /* Tabela Estilo BI */
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
     th { background-color: var(--azul-escuro); color: white; padding: 12px; text-align: left; }
     td { padding: 10px 12px; border-bottom: 1px solid #eee; }
     tr:hover { background-color: #f9f9f9; }
-    
     .btn { background-color: var(--azul-escuro); color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
     .btn-success { background-color: var(--verde-ok); }
     .form-group { margin-bottom: 15px; }
@@ -152,9 +155,7 @@ HTML_ADMIN = CSS_PADRAO + """
 
 @app.route('/')
 def dashboard():
-    # Aqui vamos instanciar a sua lógica de cruzar_bases() puxando os dados do Postgres
-    # Por enquanto, enviamos dados simulados para renderizar o layout aprovado
-    
+    # Dados mockados temporários para visualização do layout aprovado
     dados_mock = {
         'prestador_nome': 'Hospital Geral Misto',
         'periodo_base': 'Abril/2026',
@@ -168,13 +169,10 @@ def dashboard():
         },
         'itens_detalhe': [
             {'descricao': '10101012 - CONSULTA EM PRONTO SOCORRO', 'valor_base': '45.000,00', 'delta_solicitado': '2.250,00', 'delta_concedido': '1.100,00'},
-            # Lógica da Dilma aplicada aqui: Serviço existe no contrato, mas faturamento foi zero no mês
             {'descricao': '40805018 - RX DE TORAX PA', 'valor_base': '0,00', 'delta_solicitado': '0,00', 'delta_concedido': '0,00'}, 
             {'descricao': 'DIETAS (Consolidado)', 'valor_base': '12.450,00', 'delta_solicitado': '622,50', 'delta_concedido': '0,00'}
         ]
     }
-    
-    # A mágica do Jinja2 no Flask: injeta as variáveis do Python no HTML
     return render_template_string(HTML_DASHBOARD, **dados_mock)
 
 @app.route('/admin')
@@ -196,7 +194,7 @@ def admin_upload():
         return redirect(url_for('admin'))
 
     try:
-        # Lê o arquivo dependendo da extensão
+        # Lê o arquivo
         if arquivo.filename.endswith('.parquet'):
             df = pd.read_parquet(arquivo)
         elif arquivo.filename.endswith('.csv'):
@@ -207,27 +205,26 @@ def admin_upload():
             flash("Formato não suportado. Use Parquet, CSV ou Excel.")
             return redirect(url_for('admin'))
 
-        # Garantia cravada no código: Verifica/Cria colunas UF e AP se faltarem
+        # Regra de extração: Garantir que UF e AP não se percam
         for col in ['UF', 'AP']:
             if col not in df.columns:
                 df[col] = None
         
-        # Regra de Ouro do Desconto: Se existir, garante na primeira linha
+        # Regra de negócio: Totalizar VLR_DESCONTO_OBTIDO na primeira linha
         if 'VLR_DESCONTO_OBTIDO' in df.columns:
-            # Lógica para não diluir: joga o total na primeira linha e zera o resto do bloco
-            # Isso será refinado no processing, mas o dado bruto já sobe intacto
-            pass
+            df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
+            total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
+            df['VLR_DESCONTO_OBTIDO'] = 0.0
+            if not df.empty:
+                df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = total_desconto
 
         # Inserção no PostgreSQL
         if tipo_base == 'faturamento':
-            # Faturamento: Adiciona a coluna de competência e faz APPEND (Sobe mês a mês sem apagar o anterior)
             if competencia:
                 df['COMPETENCIA'] = competencia
             df.to_sql('faturamento', con=engine, if_exists='append', index=False)
             flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.")
-            
         else:
-            # Outras bases (Materiais, Dietas, etc): Faz REPLACE (Apaga a tabela velha e cria a nova atualizada)
             df.to_sql(tipo_base, con=engine, if_exists='replace', index=False)
             flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.")
 
@@ -237,5 +234,6 @@ def admin_upload():
     return redirect(url_for('admin'))
 
 if __name__ == '__main__':
-    # Roda localmente na porta 5000 para testes
-    app.run(debug=True, port=5000)
+    # Configuração dinâmica de porta exigida pelo Railway
+    porta = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=porta)
