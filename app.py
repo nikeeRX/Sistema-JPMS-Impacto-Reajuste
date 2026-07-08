@@ -105,7 +105,7 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 
 # =====================================================================
-# CSS E HTML EMBUTIDOS (NOVO VISUAL POSTAL SAÚDE)
+# CSS E HTML EMBUTIDOS (VISUAL POSTAL SAÚDE)
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -157,35 +157,20 @@ CSS_PADRAO = """
     .impacto-card .valor { color: var(--azul-postal); }
     
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th { 
-        background-color: var(--azul-postal); 
-        color: white; 
-        padding: 12px; 
-        text-align: left; 
-        border-bottom: 3px solid var(--amarelo-postal); 
-    }
+    th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; border-bottom: 3px solid var(--amarelo-postal); }
     td { padding: 10px 12px; border-bottom: 1px solid #eee; }
     tr:hover { background-color: #f4f7f6; }
     
-    .btn { 
-        background-color: var(--amarelo-postal); 
-        color: var(--azul-postal); 
-        font-weight: bold;
-        padding: 10px 20px; 
-        border: none; 
-        border-radius: 4px; 
-        cursor: pointer; 
-        text-decoration: none; 
-        display: inline-block; 
-        transition: background-color 0.3s;
-    }
+    .btn { background-color: var(--amarelo-postal); color: var(--azul-postal); font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; transition: background-color 0.3s; }
     .btn:hover { background-color: #e0a100; }
-    
     .btn-success { background-color: var(--azul-claro); color: white; font-weight: normal; }
     .btn-success:hover { background-color: var(--azul-postal); }
     
     .form-group { margin-bottom: 15px; }
     .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); }
+    .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+    .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
+    .alert-info { background: #e3f2fd; color: var(--azul-postal); border: 1px solid var(--azul-claro); }
 </style>
 """
 
@@ -202,6 +187,25 @@ HTML_DASHBOARD = CSS_PADRAO + """
 </div>
 
 <div class="container">
+    {% with messages = get_flashed_messages(category_filter=["info"]) %}
+      {% if messages %}
+        {% for message in messages %}
+          <div class="alert alert-info"><strong>Aviso:</strong> {{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card" style="background-color: var(--azul-postal); color: white; border-top: none;">
+        <h3 style="margin-top:0; color: var(--amarelo-postal);">Painel de Controle: Análise de Impacto</h3>
+        <form action="/analisar" method="post" style="display: flex; gap: 15px; align-items: flex-end;">
+            <div class="form-group" style="margin-bottom: 0; flex: 1;">
+                <label style="color: white;">Competência do Faturamento (Ex: 2026-04):</label>
+                <input type="text" name="competencia_alvo" style="width: 100%; padding: 10px; border-radius: 4px; border: none; box-sizing: border-box;" placeholder="YYYY-MM" required>
+            </div>
+            <button type="submit" class="btn" style="height: 38px;">Cruzar Bases e Calcular Impacto</button>
+        </form>
+    </div>
+
     <div class="card">
         <h3 style="margin-top:0; color: var(--azul-postal);">Resumo Financeiro Final</h3>
         <div class="grid-4">
@@ -264,11 +268,18 @@ HTML_ADMIN = CSS_PADRAO + """
 </div>
 <div class="container">
     <div class="card" style="max-width: 600px; margin: 0 auto; border-top: 4px solid var(--amarelo-postal);">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Upload de Bases (Parquet / CSV / Excel)</h3>
-        {% with messages = get_flashed_messages() %}
+        <h3 style="margin-top:0; color: var(--azul-postal);">Upload de Bases (Parquet / CSV / TXT / Excel)</h3>
+        {% with messages = get_flashed_messages(category_filter=["success"]) %}
           {% if messages %}
             {% for message in messages %}
-              <div style="padding: 10px; background: #e6f4ea; color: var(--verde-ok); border-radius: 4px; margin-bottom: 15px; border: 1px solid var(--verde-ok);">{{ message }}</div>
+              <div class="alert alert-success">{{ message }}</div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+        {% with messages = get_flashed_messages(category_filter=["error"]) %}
+          {% if messages %}
+            {% for message in messages %}
+              <div class="alert" style="background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta);">{{ message }}</div>
             {% endfor %}
           {% endif %}
         {% endwith %}
@@ -292,7 +303,7 @@ HTML_ADMIN = CSS_PADRAO + """
             </div>
 
             <div class="form-group">
-                <label>Arquivo (.parquet, .csv, .xlsx):</label>
+                <label>Arquivo (.parquet, .csv, .txt, .xlsx):</label>
                 <input type="file" name="arquivo" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" required>
             </div>
             
@@ -306,7 +317,6 @@ HTML_ADMIN = CSS_PADRAO + """
 # ROTAS DA APLICAÇÃO
 # =====================================================================
 
-# Rota especial que "ensina" o Flask a pegar a logo na raiz!
 @app.route('/Logo_Postal-03.png')
 def serve_logo():
     return send_from_directory(os.getcwd(), 'Logo_Postal-03.png')
@@ -314,8 +324,8 @@ def serve_logo():
 @app.route('/')
 def dashboard():
     dados_mock = {
-        'prestador_nome': 'Hospital Geral Misto',
-        'periodo_base': 'Abril/2026',
+        'prestador_nome': 'Hospital Geral Misto (Dados de Teste)',
+        'periodo_base': 'Aguardando Análise',
         'totais': {
             'faturamento_total': '277.173,22',
             'total_solicitado': '11.708,58',
@@ -332,6 +342,12 @@ def dashboard():
     }
     return render_template_string(HTML_DASHBOARD, **dados_mock)
 
+@app.route('/analisar', methods=['POST'])
+def analisar():
+    competencia_alvo = request.form.get('competencia_alvo')
+    flash(f"Processamento solicitado para a competência {competencia_alvo}. O motor de cruzamento SQL será ligado no próximo passo!", "info")
+    return redirect(url_for('dashboard'))
+
 @app.route('/admin')
 def admin():
     return render_template_string(HTML_ADMIN)
@@ -339,7 +355,7 @@ def admin():
 @app.route('/admin_upload', methods=['POST'])
 def admin_upload():
     if 'arquivo' not in request.files:
-        flash("Nenhum arquivo enviado!")
+        flash("Nenhum arquivo enviado!", "error")
         return redirect(url_for('admin'))
         
     arquivo = request.files['arquivo']
@@ -347,30 +363,35 @@ def admin_upload():
     competencia = request.form.get('competencia')
     
     if arquivo.filename == '':
-        flash("Nenhum arquivo selecionado!")
+        flash("Nenhum arquivo selecionado!", "error")
         return redirect(url_for('admin'))
 
     if not engine:
-        flash("Erro crítico: Banco de dados não conectado!")
+        flash("Erro crítico: Banco de dados não conectado!", "error")
         return redirect(url_for('admin'))
 
     try:
         if arquivo.filename.endswith('.parquet'):
             df = pd.read_parquet(arquivo)
-        elif arquivo.filename.endswith('.csv'):
-            df = pd.read_csv(arquivo, sep=None, engine='python')
+        elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
+            # LEITOR SUPORTANDO CSV E TXT COM SUPORTE A ENCODINGS CORPORATIVOS
+            try:
+                df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8')
+            except UnicodeDecodeError:
+                arquivo.seek(0)
+                df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1')
         elif arquivo.filename.endswith('.xlsx'):
             df = pd.read_excel(arquivo)
         else:
-            flash("Formato não suportado. Use Parquet, CSV ou Excel.")
+            flash("Formato não suportado. Use Parquet, CSV, TXT ou Excel.", "error")
             return redirect(url_for('admin'))
 
-        # Lógica para não perder a informação da UF e AP
+        # Lógica para garantir colunas críticas de localização
         for col in ['UF', 'AP']:
             if col not in df.columns:
                 df[col] = None
         
-        # Lógica do total do VLR_DESCONTO_OBTIDO concentrado
+        # Lógica de agrupamento financeiro de desconto na primeira linha
         if 'VLR_DESCONTO_OBTIDO' in df.columns:
             df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
             total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
@@ -383,12 +404,12 @@ def admin_upload():
                 if competencia:
                     df['COMPETENCIA'] = competencia
                 df.to_sql('faturamento', con=conn, if_exists='append', index=False)
-                flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.")
+                flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.", "success")
             else:
                 df.to_sql(tipo_base, con=conn, if_exists='replace', index=False)
-                flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.")
+                flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.", "success")
 
     except Exception as e:
-        flash(f"Erro ao processar arquivo: {str(e)}")
+        flash(f"Erro ao processar arquivo: {str(e)}", "error")
 
     return redirect(url_for('admin'))
