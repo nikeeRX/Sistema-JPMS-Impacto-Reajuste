@@ -121,7 +121,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# INTERFACE HTML (VISUAL COMPLETO POSTAL SAÚDE)
+# INTERFACE HTML (VISUAL POSTAL SAÚDE REVISADO E COMPLETO)
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -145,6 +145,8 @@ CSS_PADRAO = """
     .btn:hover { background-color: #e0a100; }
     .btn-success { background-color: var(--verde-ok); color: white; }
     .btn-success:hover { background-color: #004d20; }
+    .btn-danger { background-color: var(--vermelho-alerta); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+    .btn-danger:hover { background-color: #990000; }
     .form-group { margin-bottom: 15px; }
     .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); }
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
@@ -258,7 +260,7 @@ HTML_ADMIN = CSS_PADRAO + """
                     <select name="tipo_base" style="width: 100%; padding: 10px;" required>
                         <option value="faturamento">Faturamento Mensal</option>
                         <option value="dotacoes">Base de Dotações</option>
-                        <option value="materiais">Materials Perfurocortantes</option>
+                        <option value="materiais">Materiais Perfurocortantes</option>
                         <option value="dietas">Dietas</option>
                         <option value="faixas">Faixa de Eventos</option>
                         <option value="prestadores">Prestadores</option>
@@ -285,21 +287,48 @@ HTML_ADMIN = CSS_PADRAO + """
         </div>
 
         <div class="card" style="border-top: 4px solid var(--amarelo-postal);">
-            <h3 style="margin-top:0; color: var(--azul-postal);">Gerenciador de Tabelas Ativas</h3>
+            <h3 style="margin-top:0; color: var(--azul-postal);">Gerenciador de Tabelas e Módulos</h3>
             <table>
-                <thead><tr><th>Tabela</th><th>Status</th><th>Linhas</th><th>Ação</th></tr></thead>
+                <thead><tr><th>Tabela / Competência</th><th>Status</th><th>Linhas</th><th>Ação</th></tr></thead>
                 <tbody>
                     {% for t_id, info in status_bases.items() %}
-                    <tr>
-                        <td><strong>{{ info.desc }}</strong></td>
-                        <td style="color:{% if info.linhas > 0 %}var(--verde-ok){% else %}#999{% endif %}; font-weight:bold;">{{ info.status }}</td>
-                        <td>{{ info.linhas }}</td>
-                        <td>
-                            {% if info.linhas > 0 %}
-                            <form action="/admin/limpar/{{ t_id }}" method="post" style="margin:0;"><button type="submit" style="background:var(--vermelho-alerta); color:white; border:none; padding:5px 10px; border-radius:4px; cursor:pointer;">Limpar</button></form>
-                            {% endif %}
-                        </td>
-                    </tr>
+                        {% if t_id == 'faturamento' %}
+                            <tr style="background: #f0f4f8;">
+                                <td><strong>Faturamento Geral</strong><br><span style="font-family:monospace; font-size:0.8em; color:#777;">{{ t_id }}</span></td>
+                                <td style="color:{% if info.linhas > 0 %}var(--verde-ok){% else %}#999{% endif %}; font-weight:bold;">{{ info.status }}</td>
+                                <td><strong>{{ info.linhas }}</strong></td>
+                                <td>
+                                    {% if info.linhas > 0 %}
+                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Deseja apagar TODO o faturamento de todos os meses?');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar Tudo</button></form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                            
+                            {% for c in comps_fat %}
+                            <tr style="background: #ffffff; font-size: 0.9em;">
+                                <td style="padding-left: 25px; color: var(--azul-claro);">└─ Mês Salvo: <strong>{{ c.comp }}</strong></td>
+                                <td style="color: #666; font-style: italic;">Competência Ativa</td>
+                                <td>{{ c.linhas }}</td>
+                                <td>
+                                    <form action="/admin/limpar_competencia/{{ c.comp }}" method="post" onsubmit="return confirm('Tem certeza que deseja apagar apenas o mês {{ c.comp }}?');" style="margin:0;">
+                                        <button type="submit" class="btn-danger" style="background:#e67e22; padding: 3px 8px; font-size: 0.85em;">Excluir Mês</button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                            
+                        {% else %}
+                            <tr>
+                                <td><strong>{{ info.desc }}</strong><br><span style="font-family:monospace; font-size:0.8em; color:#777;">{{ t_id }}</span></td>
+                                <td style="color:{% if info.linhas > 0 %}var(--verde-ok){% else %}#999{% endif %}; font-weight:bold;">{{ info.status }}</td>
+                                <td>{{ info.linhas }}</td>
+                                <td>
+                                    {% if info.linhas > 0 %}
+                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar a tabela {{ info.desc }}?');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar</button></form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endif %}
                     {% endfor %}
                 </tbody>
             </table>
@@ -326,23 +355,17 @@ def dashboard():
         try:
             df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"), con=engine)
             if not df_fat.empty:
-                # Substituídos os blocos bugados por Python Try/Except seguro
                 try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
                 except: df_mat = pd.DataFrame()
-                
                 try: df_die = pd.read_sql(text("SELECT * FROM dietas"), con=engine)
                 except: df_die = pd.DataFrame()
-                
                 try: df_dot = pd.read_sql(text("SELECT * FROM dotacoes"), con=engine)
                 except: df_dot = pd.DataFrame()
-                
                 try: df_fai = pd.read_sql(text("SELECT * FROM faixas"), con=engine)
                 except: df_fai = pd.DataFrame()
-                
                 try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
                 except: df_pre = pd.DataFrame()
 
-                # Executa processamento real das colunas
                 df_resultado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
                 
                 if not df_resultado.empty:
@@ -367,7 +390,6 @@ def dashboard():
                             'total_desconto': f"{tot_desc:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                         }
 
-                        # RESTAURADO: Lógica real de agregação para montar a tabela do Dashboard
                         grupo = df_resultado.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM']).agg(
                             qtd=(v_col, 'count'),
                             valor_total=(v_col, 'sum')
@@ -419,7 +441,20 @@ def exportar():
 
 @app.route('/admin')
 def admin(): 
-    return render_template_string(HTML_ADMIN, status_bases=obter_linhas_tabela())
+    status = obter_linhas_tabela()
+    comps_fat = []
+    
+    # Busca dinamicamente quais competências de faturamento existem no banco
+    if engine:
+        try:
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
+                for row in res:
+                    comps_fat.append({'comp': row[0], 'linhas': row[1]})
+        except:
+            pass # Se a tabela não existir, comps_fat fica vazio (normal)
+            
+    return render_template_string(HTML_ADMIN, status_bases=status, comps_fat=comps_fat)
 
 @app.route('/admin/limpar/<tipo_base>', methods=['POST'])
 def limpar_base(tipo_base):
@@ -432,14 +467,25 @@ def limpar_base(tipo_base):
             flash(f"Erro ao limpar base: {str(e)}", "error")
     return redirect(url_for('admin'))
 
+# NOVA ROTA: Permite deletar cirurgicamente apenas 1 competência específica
+@app.route('/admin/limpar_competencia/<comp>', methods=['POST'])
+def limpar_competencia(comp):
+    if engine:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"DELETE FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"))
+            flash(f"A competência [{comp}] foi removida com sucesso do Faturamento!", "success")
+        except Exception as e:
+            flash(f"Erro ao deletar mês específico: {str(e)}", "error")
+    return redirect(url_for('admin'))
+
 @app.route('/admin_upload', methods=['POST'])
 def admin_upload():
-    # Coleta arquivos de ambas as formas de seleção (pasta e soltos)
     arquivos = request.files.getlist('arquivos_pasta') + request.files.getlist('arquivos_soltos')
     tipo_base = request.form.get('tipo_base')
     competencia = request.form.get('competencia')
     
-    if not arquivos or all(a.filename == '' for a in arquivos):
+    if not archivos or all(a.filename == '' for a in arquivos):
         flash("Nenhum arquivo enviado!", "error")
         return redirect(url_for('admin'))
 
