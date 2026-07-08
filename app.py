@@ -180,74 +180,80 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
         <div>
             <h2 style="margin:0;">GERED - Sistema de Impacto de Reajuste</h2>
-            <p style="margin:5px 0 0 0; color: #d4e3ef;">Prestador: {{ prestador_nome }} | Competência: {{ periodo_base }}</p>
+            <p style="margin:5px 0 0 0; color: #d4e3ef;">Filtro de Competência: <strong>{{ periodo_base }}</strong></p>
         </div>
     </div>
     <a href="/admin" class="btn">Painel Admin (Uploads)</a>
 </div>
 
 <div class="container">
-    {% with messages = get_flashed_messages(category_filter=["info"]) %}
+    {% with messages = get_flashed_messages(category_filter=["info", "error"]) %}
       {% if messages %}
         {% for message in messages %}
-          <div class="alert alert-info"><strong>Aviso:</strong> {{ message }}</div>
-        {% endfor %}
+          <div class="alert alert-info"><strong>Status do Sistema:</strong> {{ message }}</div>
+        {"% endfor %"}
       {% endif %}
     {% endwith %}
 
     <div class="card" style="background-color: var(--azul-postal); color: white; border-top: none;">
-        <h3 style="margin-top:0; color: var(--amarelo-postal);">Painel de Controle: Análise de Impacto</h3>
-        <form action="/analisar" method="post" style="display: flex; gap: 15px; align-items: flex-end;">
+        <h3 style="margin-top:0; color: var(--amarelo-postal);">Painel de Controle: Calcular Cruzamentos</h3>
+        <form action="/" method="get" style="display: flex; gap: 15px; align-items: flex-end;">
             <div class="form-group" style="margin-bottom: 0; flex: 1;">
-                <label style="color: white;">Competência do Faturamento (Ex: 2026-04):</label>
-                <input type="text" name="competencia_alvo" style="width: 100%; padding: 10px; border-radius: 4px; border: none; box-sizing: border-box;" placeholder="YYYY-MM" required>
+                <label style="color: white;">Selecione a Competência Alvo (Ex: 2026-04):</label>
+                <input type="text" name="comp" style="width: 100%; padding: 10px; border-radius: 4px; border: none; box-sizing: border-box;" placeholder="YYYY-MM" value="{{ comp_atual }}" required>
             </div>
             <button type="submit" class="btn" style="height: 38px;">Cruzar Bases e Calcular Impacto</button>
         </form>
     </div>
 
     <div class="card">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Resumo Financeiro Final</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Resumo Financeiro Real (Base: {{ periodo_base }})</h3>
         <div class="grid-4">
             <div class="metric-box">
-                <h4>Faturamento Total</h4>
+                <h4>Faturamento Total Lido</h4>
                 <div class="valor">R$ {{ totais.faturamento_total }}</div>
+                <div class="sub">{{ totais.linhas_faturamento }} linhas processadas</div>
             </div>
             <div class="metric-box">
-                <h4>Total Solicitado</h4>
-                <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.total_solicitado }}</div>
-                <div class="sub">{{ totais.pct_solicitado }}% do faturamento</div>
+                <h4>Itens em Dotação</h4>
+                <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_dotacao }}</div>
+                <div class="sub">Cruzados por Chave Única</div>
             </div>
             <div class="metric-box">
-                <h4>Total Concedido</h4>
-                <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
-                <div class="sub">{{ totais.pct_concedido }}% do faturamento</div>
+                <h4>Faixas de Eventos</h4>
+                <div class="valor" style="color: var(--amarelo-postal);">R$ {{ totais.total_faixa }}</div>
+                <div class="sub">Regras por Faixas Aplicadas</div>
             </div>
             <div class="metric-box impacto-card">
-                <h4>Custo Evitado</h4>
-                <div class="valor">R$ {{ totais.custo_evitado }}</div>
+                <h4>Desconto Concentrado</h4>
+                <div class="valor">R$ {{ totais.total_desconto }}</div>
+                <div class="sub">Primeira linha preservada</div>
             </div>
         </div>
     </div>
 
     <div class="card">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento por Item de Configuração</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento por Grupo de Despesa Final (Cruzamento Real)</h3>
         <table>
             <thead>
                 <tr>
-                    <th>Item / Serviço</th>
-                    <th>Valor Base (R$)</th>
-                    <th>Impacto Solicitado (R$)</th>
-                    <th>Impacto Concedido (R$)</th>
+                    <th>Grupo de Despesa (TIPO_DESPESA_FINAL)</th>
+                    <th>Origem da Regra (ORIGEM)</th>
+                    <th>Qtd de Itens</th>
+                    <th>Valor Total Pago (R$)</th>
                 </tr>
             </thead>
             <tbody>
                 {% for item in itens_detalhe %}
                 <tr>
-                    <td><strong>{{ item.descricao }}</strong></td>
-                    <td>R$ {{ item.valor_base }}</td>
-                    <td style="color: var(--vermelho-alerta); font-weight: bold;">R$ {{ item.delta_solicitado }}</td>
-                    <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.delta_concedido }}</td>
+                    <td><strong>{{ item.tipo_despesa }}</strong></td>
+                    <td><span style="background: #eef2f5; padding: 4px 8px; border-radius: 4px;">{{ item.origem }}</span></td>
+                    <td>{{ item.qtd }}</td>
+                    <td style="color: var(--azul-postal); font-weight: bold;">R$ {{ item.valor }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="4" style="text-align: center; color: #888; padding: 20px;">Nenhum dado processado para esta competência. Suba os arquivos no Painel Admin e digite a competência acima.</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -268,7 +274,7 @@ HTML_ADMIN = CSS_PADRAO + """
 </div>
 <div class="container">
     <div class="card" style="max-width: 600px; margin: 0 auto; border-top: 4px solid var(--amarelo-postal);">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Upload em Massa de Bases (Parquet / CSV / TXT / Excel)</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Upload Multifiles (Lote Completo)</h3>
         {% with messages = get_flashed_messages(category_filter=["success"]) %}
           {% if messages %}
             {% for message in messages %}
@@ -303,11 +309,11 @@ HTML_ADMIN = CSS_PADRAO + """
             </div>
 
             <div class="form-group">
-                <label>Selecione um ou Vários Arquivos (Segure CTRL para selecionar vários):</label>
-                <input type="file" name="arquivos" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" multiple required>
+                <label>Selecione os arquivos (Pode selecionar vários de uma vez só):</label>
+                <input type="file" name="arquivos_upload" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" multiple required>
             </div>
             
-            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px; font-size: 16px;">Processar e Enviar tudo para o Banco</button>
+            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px; font-size: 16px;">Processar e Enviar Lote para o Banco</button>
         </form>
     </div>
 </div>
@@ -323,30 +329,72 @@ def serve_logo():
 
 @app.route('/')
 def dashboard():
-    dados_mock = {
-        'prestador_nome': 'Hospital Geral Misto (Dados de Teste)',
-        'periodo_base': 'Aguardando Análise',
-        'totais': {
-            'faturamento_total': '277.173,22',
-            'total_solicitado': '11.708,58',
-            'pct_solicitado': '4.83',
-            'total_concedido': '6.131,70',
-            'pct_concedido': '0.72',
-            'custo_evitado': '5.576,88'
-        },
-        'itens_detalhe': [
-            {'descricao': '10101012 - CONSULTA EM PRONTO SOCORRO', 'valor_base': '45.000,00', 'delta_solicitado': '2.250,00', 'delta_concedido': '1.100,00'},
-            {'descricao': '40805018 - RX DE TORAX PA', 'valor_base': '0,00', 'delta_solicitado': '0,00', 'delta_concedido': '0,00'}, 
-            {'descricao': 'DIETAS (Consolidado)', 'valor_base': '12.450,00', 'delta_solicitado': '622,50', 'delta_concedido': '0,00'}
-        ]
-    }
-    return render_template_string(HTML_DASHBOARD, **dados_mock)
+    comp = request.args.get('comp', '').strip()
+    
+    # Valores default estruturados de resposta segura
+    totais = {'faturamento_total': '0,00', 'linhas_faturamento': 0, 'total_dotacao': '0,00', 'total_faixa': '0,00', 'total_desconto': '0,00'}
+    itens_detalhe = []
+    
+    if comp and engine:
+        try:
+            # 1. Puxa faturamento filtrado pela competência digitada
+            df_fat = pd.read_sql(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'", con=engine)
+            
+            if not df_fat.empty:
+                # Helper para carregar outras tabelas auxiliares se existirem
+                def carregar_tabela_safe(nome):
+                    try: return pd.read_sql(f"SELECT * FROM {nome}", con=engine)
+                    except: return pd.DataFrame()
 
-@app.route('/analisar', methods=['POST'])
-def analisar():
-    competencia_alvo = request.form.get('competencia_alvo')
-    flash(f"Processamento solicitado para a competência {competencia_alvo}. O motor de cruzamento SQL será ligado no próximo passo!", "info")
-    return redirect(url_for('dashboard'))
+                df_mat = carregar_tabela_safe('materiais')
+                df_die = carregar_tabela_safe('dietas')
+                df_dot = carregar_tabela_safe('dotacoes')
+                df_fai = carregar_tabela_safe('faixas')
+                df_pre = carregar_tabela_safe('prestadores')
+
+                # 2. EXECUTA O MOTOR REAL DE CRUZAMENTO DE COLUNAS
+                df_resultado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+
+                if not df_resultado.empty:
+                    # Identifica coluna de valor dinamicamente
+                    v_col = _find_column(df_resultado, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR'])
+                    if v_col:
+                        df_resultado[v_col] = pd.to_numeric(df_resultado[v_col], errors='coerce').fillna(0)
+                        
+                        # Cálculos volumétricos reais para os cards
+                        fat_total = df_resultado[v_col].sum()
+                        tot_dot = df_resultado[df_resultado['ORIGEM'] == 'Dotação'][v_col].sum()
+                        tot_fai = df_resultado[df_resultado['ORIGEM'] == 'Faixa de Evento'][v_col].sum()
+                        
+                        tot_desc = 0.0
+                        if 'VLR_DESCONTO_OBTIDO' in df_resultado.columns:
+                            tot_desc = pd.to_numeric(df_resultado['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0).sum()
+
+                        totais = {
+                            'faturamento_total': f"{fat_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                            'linhas_faturamento': len(df_resultado),
+                            'total_dotacao': f"{tot_dot:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                            'total_faixa': f"{tot_fai:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                            'total_desconto': f"{tot_desc:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                        }
+
+                        # 3. AGRUPAMENTO DAS COLUNAS PARA O DETALHAMENTO DA TABELA
+                        grupo = df_resultado.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM']).agg(
+                            qtd=(v_col, 'count'),
+                            valor_total=(v_col, 'sum')
+                        ).reset_index()
+
+                        for _, r in grupo.iterrows():
+                            itens_detalhe.append({
+                                'tipo_despesa': r['TIPO_DESPESA_FINAL'],
+                                'origem': r['ORIGEM'],
+                                'qtd': r['qtd'],
+                                'valor': f"{r['valor_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                            })
+        except Exception as e:
+            flash(f"Erro ao processar análise em tempo real: {str(e)}", "error")
+
+    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=comp if comp else "Nenhuma selecionada", comp_atual=comp)
 
 @app.route('/admin')
 def admin():
@@ -354,28 +402,27 @@ def admin():
 
 @app.route('/admin_upload', methods=['POST'])
 def admin_upload():
-    if 'arquivos' not in request.files:
-        flash("Nenhum arquivo enviado!", "error")
-        return redirect(url_for('admin'))
+    # TRUQUE BULLETPROOF: Captura de todos os arquivos independentemente do nome do campo HTML
+    arquivos = []
+    for chave in request.files:
+        arquivos.extend(request.files.getlist(chave))
         
-    arquivos = request.files.getlist('arquivos')
     tipo_base = request.form.get('tipo_base')
     competencia = request.form.get('competencia')
     
     if not arquivos or arquivos[0].filename == '':
-        flash("Nenhum arquivo selecionado!", "error")
+        flash("Nenhum arquivo válido foi selecionado!", "error")
         return redirect(url_for('admin'))
 
     if not engine:
-        flash("Erro crítico: Banco de dados não conectado!", "error")
+        flash("Erro crítico: Banco de dados PostgreSQL desplugado!", "error")
         return redirect(url_for('admin'))
 
     linhas_totais = 0
-    arquivos_processados = 0
-    primeiro_arquivo = True
+    arquivos_sucesso = 0
+    primeiro_do_lote = True
 
     try:
-        # LAÇO DO PLANO B: CRUZA E PROCESSA CADA UM DOS ARQUIVOS SELECIONADOS
         for arquivo in arquivos:
             if arquivo.filename == '':
                 continue
@@ -396,12 +443,12 @@ def admin_upload():
             if df.empty:
                 continue
 
-            # Lógica para garantir colunas críticas de localização (UF e AP)
+            # Garante colunas de identificação de região (UF e AP)
             for col in ['UF', 'AP']:
                 if col not in df.columns:
                     df[col] = None
             
-            # Lógica de agrupamento financeiro de desconto concentrado na primeira linha
+            # Lógica absoluta do desconto calculada em linha única
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
                 df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
                 total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
@@ -412,26 +459,23 @@ def admin_upload():
                 if tipo_base == 'faturamento':
                     if competencia:
                         df['COMPETENCIA'] = competencia
-                    # Faturamento sempre adiciona novos dados (append)
+                    # Faturamento acumula histórico via append seguro
                     df.to_sql('faturamento', con=conn, if_exists='append', index=False)
                 else:
-                    # Outras bases: o primeiro limpa o antigo (replace), os seguintes adicionam (append)
-                    modo = 'replace' if primeiro_arquivo else 'append'
+                    # Bases de apoio limpam a anterior e registram lote atualizado
+                    modo = 'replace' if primeiro_do_lote else 'append'
                     df.to_sql(tipo_base, con=conn, if_exists=modo, index=False)
 
             linhas_totais += len(df)
-            arquivos_processados += 1
-            primeiro_arquivo = False
+            arquivos_sucesso += 1
+            primeiro_do_lote = False
 
-        if arquivos_processados > 0:
-            if tipo_base == 'faturamento':
-                flash(f"Sucesso! Processados {arquivos_processados} arquivos de Faturamento ({competencia or 'Sem competência'}). Total de {linhas_totais} linhas gravadas.", "success")
-            else:
-                flash(f"Sucesso! Base de {tipo_base} atualizada com {arquivos_processados} arquivos e {linhas_totais} linhas no total.", "success")
+        if arquivos_sucesso > 0:
+            flash(f"Sucesso Total! Processados {arquivos_sucesso} arquivos da base [{tipo_base}]. Foram injetadas {linhas_totais} linhas no PostgreSQL.", "success")
         else:
-            flash("Nenhum arquivo válido foi processado.", "error")
+            flash("Nenhum arquivo correspondia às extensões aceitas (.parquet, .csv, .txt, .xlsx)", "error")
 
     except Exception as e:
-        flash(f"Erro ao processar lote de arquivos: {str(e)}", "error")
+        flash(f"Erro crítico no lote: {str(e)}", "error")
 
     return redirect(url_for('admin'))
