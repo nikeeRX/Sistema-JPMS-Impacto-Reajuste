@@ -11,8 +11,11 @@ RUN apt-get update && apt-get install -y libpq-dev gcc && rm -rf /var/lib/apt/li
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copia o resto do teu código (incluindo o app.py e a imagem da Postal Saúde)
+# Copia o resto do teu código
 COPY . .
 
-# Comando otimizado para poupar memória RAM no Railway (--preload é a chave)
-CMD sh -c "gunicorn app:app -b 0.0.0.0:${PORT:-5000} --timeout 120 --workers 1 --preload"
+# Garante que sempre exista um número de porta válido (O Railway sobrepõe isso se precisar)
+ENV PORT=5000
+
+# Comando limpo, sem aspas duplas complexas, para o Linux ler a variável perfeitamente
+CMD gunicorn app:app -b 0.0.0.0:$PORT --timeout 120 --workers 1 --preload
