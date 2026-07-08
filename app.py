@@ -268,7 +268,7 @@ HTML_ADMIN = CSS_PADRAO + """
 </div>
 <div class="container">
     <div class="card" style="max-width: 600px; margin: 0 auto; border-top: 4px solid var(--amarelo-postal);">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Upload de Bases (Parquet / CSV / TXT / Excel)</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Upload em Massa de Bases (Parquet / CSV / TXT / Excel)</h3>
         {% with messages = get_flashed_messages(category_filter=["success"]) %}
           {% if messages %}
             {% for message in messages %}
@@ -303,11 +303,11 @@ HTML_ADMIN = CSS_PADRAO + """
             </div>
 
             <div class="form-group">
-                <label>Arquivo (.parquet, .csv, .txt, .xlsx):</label>
-                <input type="file" name="arquivo" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" required>
+                <label>Selecione um ou Vários Arquivos (Segure CTRL para selecionar vários):</label>
+                <input type="file" name="arquivos" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" multiple required>
             </div>
             
-            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px; font-size: 16px;">Processar e Enviar para o Banco</button>
+            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px; font-size: 16px;">Processar e Enviar tudo para o Banco</button>
         </form>
     </div>
 </div>
@@ -354,15 +354,15 @@ def admin():
 
 @app.route('/admin_upload', methods=['POST'])
 def admin_upload():
-    if 'arquivo' not in request.files:
+    if 'arquivos' not in request.files:
         flash("Nenhum arquivo enviado!", "error")
         return redirect(url_for('admin'))
         
-    arquivo = request.files['arquivo']
+    arquivos = request.files.getlist('arquivos')
     tipo_base = request.form.get('tipo_base')
     competencia = request.form.get('competencia')
     
-    if arquivo.filename == '':
+    if not arquivos or arquivos[0].filename == '':
         flash("Nenhum arquivo selecionado!", "error")
         return redirect(url_for('admin'))
 
@@ -370,46 +370,68 @@ def admin_upload():
         flash("Erro crítico: Banco de dados não conectado!", "error")
         return redirect(url_for('admin'))
 
-    try:
-        if arquivo.filename.endswith('.parquet'):
-            df = pd.read_parquet(arquivo)
-        elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
-            # LEITOR SUPORTANDO CSV E TXT COM SUPORTE A ENCODINGS CORPORATIVOS
-            try:
-                df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8')
-            except UnicodeDecodeError:
-                arquivo.seek(0)
-                df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1')
-        elif arquivo.filename.endswith('.xlsx'):
-            df = pd.read_excel(arquivo)
-        else:
-            flash("Formato não suportado. Use Parquet, CSV, TXT ou Excel.", "error")
-            return redirect(url_for('admin'))
+    linhas_totais = 0
+    arquivos_processados = 0
+    primeiro_arquivo = True
 
-        # Lógica para garantir colunas críticas de localização
-        for col in ['UF', 'AP']:
-            if col not in df.columns:
-                df[col] = None
-        
-        # Lógica de agrupamento financeiro de desconto na primeira linha
-        if 'VLR_DESCONTO_OBTIDO' in df.columns:
-            df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
-            total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
-            df['VLR_DESCONTO_OBTIDO'] = 0.0
-            if not df.empty:
+    try:
+        # LAÇO DO PLANO B: CRUZA E PROCESSA CADA UM DOS ARQUIVOS SELECIONADOS
+        for arquivo in arquivos:
+            if arquivo.filename == '':
+                continue
+                
+            if arquivo.filename.endswith('.parquet'):
+                df = pd.read_parquet(arquivo)
+            elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
+                try:
+                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8')
+                except UnicodeDecodeError:
+                    arquivo.seek(0)
+                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1')
+            elif arquivo.filename.endswith('.xlsx'):
+                df = pd.read_excel(arquivo)
+            else:
+                continue
+
+            if df.empty:
+                continue
+
+            # Lógica para garantir colunas críticas de localização (UF e AP)
+            for col in ['UF', 'AP']:
+                if col not in df.columns:
+                    df[col] = None
+            
+            # Lógica de agrupamento financeiro de desconto concentrado na primeira linha
+            if 'VLR_DESCONTO_OBTIDO' in df.columns:
+                df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
+                total_desconto = df['VLR_DESCONTO_OBTIDO'].sum()
+                df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = total_desconto
 
-        with engine.begin() as conn:
+            with engine.begin() as conn:
+                if tipo_base == 'faturamento':
+                    if competencia:
+                        df['COMPETENCIA'] = competencia
+                    # Faturamento sempre adiciona novos dados (append)
+                    df.to_sql('faturamento', con=conn, if_exists='append', index=False)
+                else:
+                    # Outras bases: o primeiro limpa o antigo (replace), os seguintes adicionam (append)
+                    modo = 'replace' if primeiro_arquivo else 'append'
+                    df.to_sql(tipo_base, con=conn, if_exists=modo, index=False)
+
+            linhas_totais += len(df)
+            arquivos_processados += 1
+            primeiro_arquivo = False
+
+        if arquivos_processados > 0:
             if tipo_base == 'faturamento':
-                if competencia:
-                    df['COMPETENCIA'] = competencia
-                df.to_sql('faturamento', con=conn, if_exists='append', index=False)
-                flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.", "success")
+                flash(f"Sucesso! Processados {arquivos_processados} arquivos de Faturamento ({competencia or 'Sem competência'}). Total de {linhas_totais} linhas gravadas.", "success")
             else:
-                df.to_sql(tipo_base, con=conn, if_exists='replace', index=False)
-                flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.", "success")
+                flash(f"Sucesso! Base de {tipo_base} atualizada com {arquivos_processados} arquivos e {linhas_totais} linhas no total.", "success")
+        else:
+            flash("Nenhum arquivo válido foi processado.", "error")
 
     except Exception as e:
-        flash(f"Erro ao processar arquivo: {str(e)}", "error")
+        flash(f"Erro ao processar lote de arquivos: {str(e)}", "error")
 
     return redirect(url_for('admin'))
