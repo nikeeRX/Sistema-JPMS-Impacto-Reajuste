@@ -42,8 +42,8 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
     try:
         df = df_fat.copy()
         
-        # Garante a preservação de colunas estratégicas solicitadas pela área de negócio
-        for col in ['UF', 'AP']:
+        # Garante a preservação de colunas estratégicas de região
+        for col in ['UF', 'AP', 'CNPJ']:
             if col not in df.columns:
                 df[col] = None
 
@@ -91,7 +91,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         return pd.DataFrame()
 
 # =====================================================================
-# BANCO DE DADOS E STATUS
+# BANCO DE DADOS E CONFIGURAÇÃO FLASK
 # =====================================================================
 app = Flask(__name__)
 app.secret_key = "chave_secreta_super_segura_gered"
@@ -121,7 +121,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# INTERFACE HTML (VISUAL POSTAL SAÚDE REVISADO E COMPLETO)
+# CSS E HTML EMBUTIDOS (DESIGN IDENTIDADE VISUAL POSTAL SAÚDE)
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -132,23 +132,24 @@ CSS_PADRAO = """
     .container { padding: 20px 40px; }
     .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 4px solid var(--azul-claro); }
     .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
-    .metric-box { padding: 15px; border: 1px solid #eee; border-radius: 6px; text-align: center; }
-    .metric-box h4 { margin: 0 0 10px 0; color: #666; font-size: 0.9em; text-transform: uppercase; }
-    .metric-box .valor { font-size: 1.5em; font-weight: bold; color: var(--azul-postal); margin-bottom: 5px; }
+    .form-group { margin-bottom: 15px; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); font-size: 0.9em; }
+    .form-control { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em; }
+    .metric-box { padding: 15px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #fafafa; }
+    .metric-box h4 { margin: 0 0 10px 0; color: #666; font-size: 0.85em; text-transform: uppercase; }
+    .metric-box .valor { font-size: 1.6em; font-weight: bold; color: var(--azul-postal); margin-bottom: 5px; }
     .metric-box .sub { font-size: 0.85em; color: #888; }
     .impacto-card { background-color: #fff9e6; border-top: 4px solid var(--amarelo-postal); }
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
     th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; border-bottom: 3px solid var(--amarelo-postal); }
     td { padding: 10px 12px; border-bottom: 1px solid #eee; }
     tr:hover { background-color: #f4f7f6; }
-    .btn { background-color: var(--amarelo-postal); color: var(--azul-postal); font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+    .btn { background-color: var(--amarelo-postal); color: var(--azul-postal); font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; }
     .btn:hover { background-color: #e0a100; }
     .btn-success { background-color: var(--verde-ok); color: white; }
     .btn-success:hover { background-color: #004d20; }
     .btn-danger { background-color: var(--vermelho-alerta); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
     .btn-danger:hover { background-color: #990000; }
-    .form-group { margin-bottom: 15px; }
-    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); }
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
     .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
@@ -161,62 +162,110 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <img src="/Logo_Postal-03.png" class="logo-img">
         <div>
             <h2 style="margin:0;">GERED - Sistema de Impacto de Reajuste</h2>
-            <p style="margin:5px 0 0 0; color: #d4e3ef;">Competência Analisada: <strong>{{ periodo_base }}</strong></p>
+            <p style="margin:5px 0 0 0; color: #d4e3ef;">Competência Selecionada: <strong>{{ periodo_base }}</strong></p>
         </div>
     </div>
     <a href="/admin" class="btn">Painel Admin (Uploads / Gerenciador)</a>
 </div>
 
 <div class="container">
-    <div class="card" style="background-color: var(--azul-postal); color: white; border-top: none;">
-        <h3 style="margin-top:0; color: var(--amarelo-postal);">Painel de Controle: Executar Cruzamentos</h3>
-        <form action="/" method="get" style="display: flex; gap: 15px; align-items: flex-end;">
-            <div class="form-group" style="margin-bottom: 0; flex: 1;">
-                <label style="color: white;">Digite a Competência Alvo salva no banco (Ex: 2026-04):</label>
-                <input type="text" name="comp" style="width: 100%; padding: 10px; border-radius: 4px;" value="{{ comp_atual }}" placeholder="YYYY-MM" required>
+    {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
+
+    <div class="card" style="border-top: 4px solid var(--azul-postal);">
+        <h3 style="margin-top:0; color: var(--azul-postal);">Módulo de Configuração de Análise e Taxas</h3>
+        <form action="/" method="get">
+            <div class="grid-4">
+                <div class="form-group">
+                    <label>Competência Alvo (Banco):</label>
+                    <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="YYYY-MM" required>
+                </div>
+                <div class="form-group">
+                    <label>Tipo de Negociação:</label>
+                    <select name="tipo_neg" class="form-control">
+                        <option value="TODOS" {% if filtros.tipo_neg == 'TODOS' %}selected{% endif %}>Todos os Itens (Geral)</option>
+                        <option value="ESTADO" {% if filtros.tipo_neg == 'ESTADO' %}selected{% endif %}>Regional (Por Estado/UF)</option>
+                        <option value="DIFERENCIADO" {% if filtros.tipo_neg == 'DIFERENCIADO' %}selected{% endif %}>Diferenciado (Por CNPJ)</option>
+                        <option value="MISTO" {% if filtros.tipo_neg == 'MISTO' %}selected{% endif %}>Misto (Estado + CNPJ)</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>UF Específica (Se Regional/Misto):</label>
+                    <input type="text" name="uf_alvo" class="form-control" value="{{ filtros.uf_alvo }}" placeholder="Ex: GO, RS, PR">
+                </div>
+                <div class="form-group">
+                    <label>CNPJ / Grupo (Se Diferenciado/Misto):</label>
+                    <input type="text" name="cnpj_alvo" class="form-control" value="{{ filtros.cnpj_alvo }}" placeholder="Digite o CNPJ">
+                </div>
             </div>
-            <button type="submit" class="btn" style="height: 38px;">Processar Colunas</button>
+
+            <h4 style="margin: 15px 0 5px 0; color: var(--azul-claro);">Definição das Propostas de Percentuais (%)</h4>
+            <div class="grid-4">
+                <div class="form-group">
+                    <label>Dietas (% Reajuste):</label>
+                    <input type="number" step="0.01" name="p_dietas" class="form-control" value="{{ filtros.p_dietas }}">
+                </div>
+                <div class="form-group">
+                    <label>Perfurocortantes (% Reajuste):</label>
+                    <input type="number" step="0.01" name="p_perfuro" class="form-control" value="{{ filtros.p_perfuro }}">
+                </div>
+                <div class="form-group">
+                    <label>Anestesista (% Reajuste):</label>
+                    <input type="number" step="0.01" name="p_anest" class="form-control" value="{{ filtros.p_anest }}">
+                </div>
+                <div class="form-group">
+                    <label>Outros / Geral (% Reajuste):</label>
+                    <input type="number" step="0.01" name="p_outros" class="form-control" value="{{ filtros.p_outros }}">
+                </div>
+            </div>
+            
+            <div style="text-align: right; margin-top: 10px;">
+                <button type="submit" class="btn" style="width: 250px; font-size:1.05em;">Calcular Impacto Real</button>
+            </div>
         </form>
     </div>
 
     <div class="card">
         <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Real</h3>
+            <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado da Proposta</h3>
             {% if tem_dados %}
-            <a href="/exportar?comp={{ comp_atual }}" class="btn btn-success">📥 Baixar Planilha Final Cruzada (Excel)</a>
+            <a href="/exportar?comp={{ filtros.comp }}&tipo_neg={{ filtros.tipo_neg }}&uf_alvo={{ filtros.uf_alvo }}&cnpj_alvo={{ filtros.cnpj_alvo }}&p_dietas={{ filtros.p_dietas }}&p_perfuro={{ filtros.p_perfuro }}&p_anest={{ filtros.p_anest }}&p_outros={{ filtros.p_outros }}" class="btn btn-success">📥 Baixar Planilha Final Cruzada (Excel)</a>
             {% endif %}
         </div>
         
         <div class="grid-4" style="margin-top: 15px;">
             <div class="metric-box">
-                <h4>Faturamento Total</h4>
+                <h4>Faturamento Total Lido</h4>
                 <div class="valor">R$ {{ totais.faturamento_total }}</div>
-                <div class="sub">{{ totais.linhas_faturamento }} linhas processadas</div>
+                <div class="sub">{{ totais.linhas_faturamento }} linhas aplicadas</div>
             </div>
             <div class="metric-box">
-                <h4>Itens em Dotação</h4>
-                <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_dotacao }}</div>
+                <h4>Impacto Solicitado (Base)</h4>
+                <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.faturamento_total }}</div>
+                <div class="sub">Valor original faturado</div>
             </div>
             <div class="metric-box">
-                <h4>Faixas de Eventos</h4>
-                <div class="valor" style="color: var(--amarelo-postal);">R$ {{ totais.total_faixa }}</div>
+                <h4>Proposta Concedida</h4>
+                <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
+                <div class="sub">Com reajustes agregados</div>
             </div>
             <div class="metric-box impacto-card">
-                <h4>Desconto (Primeira Linha)</h4>
-                <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_desconto }}</div>
+                <h4>Custo Evitado (Economia)</h4>
+                <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.custo_evitado }}</div>
+                <div class="sub">Diferença salva na negociação</div>
             </div>
         </div>
     </div>
 
     <div class="card">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento por Grupo de Despesa Final</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento de Impacto por Classificação e Regra</h3>
         <table>
             <thead>
                 <tr>
-                    <th>Grupo de Despesa (TIPO_DESPESA_FINAL)</th>
-                    <th>Origem da Regra (ORIGEM)</th>
-                    <th>Qtd de Itens</th>
-                    <th>Valor Total Pago (R$)</th>
+                    <th>Grupo de Despesa Final</th>
+                    <th>Origem da Regra</th>
+                    <th>Qtd Itens</th>
+                    <th>Valor Solicitado (R$)</th>
+                    <th>Valor Concedido (R$)</th>
                 </tr>
             </thead>
             <tbody>
@@ -225,11 +274,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     <td><strong>{{ item.tipo_despesa }}</strong></td>
                     <td><span style="background: #eef2f5; padding: 4px 8px; border-radius: 4px; font-size:0.9em;">{{ item.origem }}</span></td>
                     <td>{{ item.qtd }}</td>
-                    <td style="color: var(--azul-postal); font-weight: bold;">R$ {{ item.valor }}</td>
+                    <td>R$ {{ item.valor_sol }}</td>
+                    <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.valor_con }}</td>
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="4" style="text-align: center; color: #888; padding: 30px;">Nenhum faturamento cruzado para esta competência. Busque acima ou vá ao Painel Admin para carregar.</td>
+                    <td colspan="5" style="text-align: center; color: #888; padding: 30px;">Aguardando filtros. Digite a competência acima e execute o processamento das colunas.</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -338,22 +388,69 @@ HTML_ADMIN = CSS_PADRAO + """
 """
 
 # =====================================================================
-# ROTAS E LOGICA CORE
+# AUXILIARES DE CÁLCULO FINANCEIRO (MÓDULO DE REAJUSTE)
 # =====================================================================
+def aplicar_reajustes_simulados(df_cruzado, f):
+    if df_cruzado.empty:
+        return df_cruzado
+        
+    df = df_cruzado.copy()
+    v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR'])
+    if not v_col:
+        return df
+
+    # Filtros de Abrangência de Negociação
+    if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
+        df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
+    elif f['tipo_neg'] == 'DIFERENCIADO' and f['cnpj_alvo']:
+        df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+    elif f['tipo_neg'] == 'MISTO':
+        if f['uf_alvo']:
+            df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
+        if f['cnpj_alvo']:
+            df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+
+    df['VALOR_SOLICITADO'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
+    df['VALOR_CONCEDIDO'] = df['VALOR_SOLICITADO'].copy()
+
+    # Aplicação cirúrgica dos percentuais digitados por grupo
+    df.loc[df['TIPO_DESPESA_FINAL'] == 'DIETAS', 'VALOR_CONCEDIDO'] *= (1 + (f['p_dietas'] / 100))
+    df.loc[df['TIPO_DESPESA_FINAL'] == 'PERFUROCORTANTES', 'VALOR_CONCEDIDO'] *= (1 + (f['p_perfuro'] / 100))
+    df.loc[df['TIPO_DESPESA_FINAL'] == 'ANESTESISTA', 'VALOR_CONCEDIDO'] *= (1 + (f['p_anest'] / 100))
+    df.loc[df['TIPO_DESPESA_FINAL'] == 'OUTROS', 'VALOR_CONCEDIDO'] *= (1 + (f['p_outros'] / 100))
+
+    df['CUSTO_EVITADO'] = df['VALOR_SOLICITADO'] - df['VALOR_CONCEDIDO']
+    return df
+
+# =====================================================================
+# ROTAS E LOGICA CORE FLASK
+# =====================================================================
+
 @app.route('/Logo_Postal-03.png')
 def serve_logo():
     return send_from_directory(os.getcwd(), 'Logo_Postal-03.png')
 
 @app.route('/')
 def dashboard():
-    comp = request.args.get('comp', '').strip()
-    totais = {'faturamento_total': '0,00', 'linhas_faturamento': 0, 'total_dotacao': '0,00', 'total_faixa': '0,00', 'total_desconto': '0,00'}
+    # Coleta e higienização dos parâmetros da url para os inputs
+    f = {
+        'comp': request.args.get('comp', '').strip(),
+        'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(),
+        'uf_alvo': request.args.get('uf_alvo', '').strip(),
+        'cnpj_alvo': request.args.get('cnpj_alvo', '').strip(),
+        'p_dietas': float(request.args.get('p_dietas', '0.00') or 0.0),
+        'p_perfuro': float(request.args.get('p_perfuro', '0.00') or 0.0),
+        'p_anest': float(request.args.get('p_anest', '0.00') or 0.0),
+        'p_outros': float(request.args.get('p_outros', '0.00') or 0.0)
+    }
+
+    totais = {'faturamento_total': '0,00', 'linhas_faturamento': 0, 'total_concedido': '0,00', 'custo_evitado': '0,00'}
     itens_detalhe = []
     tem_dados = False
     
-    if comp and engine:
+    if f['comp'] and engine:
         try:
-            df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"), con=engine)
+            df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
             if not df_fat.empty:
                 try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
                 except: df_mat = pd.DataFrame()
@@ -366,54 +463,63 @@ def dashboard():
                 try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
                 except: df_pre = pd.DataFrame()
 
-                df_resultado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+                # Roda o motor de cruzamento estrutural
+                df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
                 
-                if not df_resultado.empty:
+                # Roda a inteligência do módulo de reajuste financeiro
+                df_final = aplicar_reajustes_simulados(df_cruzado, f)
+                
+                if not df_final.empty:
                     tem_dados = True
-                    v_col = _find_column(df_resultado, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR'])
-                    if v_col:
-                        df_resultado[v_col] = pd.to_numeric(df_resultado[v_col], errors='coerce').fillna(0)
-                        
-                        fat_total = df_resultado[v_col].sum()
-                        tot_dot = df_resultado[df_resultado['ORIGEM'] == 'Dotação'][v_col].sum()
-                        tot_fai = df_resultado[df_resultado['ORIGEM'] == 'Faixa de Evento'][v_col].sum()
-                        
-                        tot_desc = 0.0
-                        if 'VLR_DESCONTO_OBTIDO' in df_resultado.columns:
-                            tot_desc = pd.to_numeric(df_resultado['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0).sum()
+                    fat_total = df_final['VALOR_SOLICITADO'].sum()
+                    con_total = df_final['VALOR_CONCEDIDO'].sum()
+                    evit_total = df_final['CUSTO_EVITADO'].sum()
 
-                        totais = {
-                            'faturamento_total': f"{fat_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                            'linhas_faturamento': len(df_resultado),
-                            'total_dotacao': f"{tot_dot:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                            'total_faixa': f"{tot_fai:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
-                            'total_desconto': f"{tot_desc:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                        }
+                    totais = {
+                        'faturamento_total': f"{fat_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                        'linhas_faturamento': len(df_final),
+                        'total_concedido': f"{con_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                        'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                    }
 
-                        grupo = df_resultado.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM']).agg(
-                            qtd=(v_col, 'count'),
-                            valor_total=(v_col, 'sum')
-                        ).reset_index()
+                    # Agrupamento das colunas calculadas para exibição estruturada
+                    grupo = df_final.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM']).agg(
+                        qtd=('VALOR_SOLICITADO', 'count'),
+                        v_sol=('VALOR_SOLICITADO', 'sum'),
+                        v_con=('VALOR_CONCEDIDO', 'sum')
+                    ).reset_index()
 
-                        for _, r in grupo.iterrows():
-                            itens_detalhe.append({
-                                'tipo_despesa': r['TIPO_DESPESA_FINAL'],
-                                'origem': r['ORIGEM'],
-                                'qtd': r['qtd'],
-                                'valor': f"{r['valor_total']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                            })
+                    for _, r in grupo.iterrows():
+                        itens_detalhe.append({
+                            'tipo_despesa': r['TIPO_DESPESA_FINAL'],
+                            'origem': r['ORIGEM'],
+                            'qtd': r['qtd'],
+                            'valor_sol': f"{r['v_sol']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
+                            'valor_con': f"{r['v_con']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                        })
         except Exception as e:
-            flash(f"Erro no processamento SQL: {str(e)}", "error")
+            flash(f"Erro ao processar simulação SQL: {str(e)}", "error")
 
-    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=comp or "Nenhuma selecionada", comp_atual=comp, tem_dados=tem_dados)
+    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=f['comp'] or "Nenhuma", comp_atual=f['comp'], filtros=f, tem_dados=tem_dados)
 
 @app.route('/exportar')
 def exportar():
-    comp = request.args.get('comp', '').strip()
-    if not comp or not engine: return redirect(url_for('dashboard'))
+    f = {
+        'comp': request.args.get('comp', '').strip(),
+        'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(),
+        'uf_alvo': request.args.get('uf_alvo', '').strip(),
+        'cnpj_alvo': request.args.get('cnpj_alvo', '').strip(),
+        'p_dietas': float(request.args.get('p_dietas', '0.00')),
+        'p_perfuro': float(request.args.get('p_perfuro', '0.00')),
+        'p_anest': float(request.args.get('p_anest', '0.00')),
+        'p_outros': float(request.args.get('p_outros', '0.00'))
+    }
+    
+    if not f['comp'] or not engine: 
+        return redirect(url_for('dashboard'))
     
     try:
-        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"), con=engine)
+        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
         if df_fat.empty: return redirect(url_for('dashboard'))
         
         try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
@@ -427,16 +533,17 @@ def exportar():
         try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
         except: df_pre = pd.DataFrame()
         
-        df_final = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+        df_final = aplicar_reajustes_simulados(df_cruzado, f)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            df_final.to_excel(writer, index=False, sheet_name=f"Cruzamento_{comp}")
+            df_final.to_excel(writer, index=False, sheet_name="Reajuste_Calculado")
         output.seek(0)
         
-        return send_file(output, download_name=f"Resultado_Cruzamento_{comp}.xlsx", as_attachment=True)
+        return send_file(output, download_name=f"Cenario_Reajuste_{f['comp']}.xlsx", as_attachment=True)
     except Exception as e:
-        flash(f"Erro ao gerar Excel: {str(e)}", "error")
+        flash(f"Erro ao gerar Excel completo: {str(e)}", "error")
         return redirect(url_for('dashboard'))
 
 @app.route('/admin')
@@ -444,7 +551,6 @@ def admin():
     status = obter_linhas_tabela()
     comps_fat = []
     
-    # Busca dinamicamente quais competências de faturamento existem no banco
     if engine:
         try:
             with engine.connect() as conn:
@@ -452,7 +558,7 @@ def admin():
                 for row in res:
                     comps_fat.append({'comp': row[0], 'linhas': row[1]})
         except:
-            pass # Se a tabela não existir, comps_fat fica vazio (normal)
+            pass
             
     return render_template_string(HTML_ADMIN, status_bases=status, comps_fat=comps_fat)
 
@@ -462,21 +568,20 @@ def limpar_base(tipo_base):
         try:
             with engine.begin() as conn: 
                 conn.execute(text(f"DROP TABLE IF EXISTS {tipo_base}"))
-            flash(f"Base de dados [{tipo_base}] limpa com sucesso!", "success")
+            flash(f"Módulo [{tipo_base}] resetado com sucesso!", "success")
         except Exception as e:
             flash(f"Erro ao limpar base: {str(e)}", "error")
     return redirect(url_for('admin'))
 
-# NOVA ROTA: Permite deletar cirurgicamente apenas 1 competência específica
 @app.route('/admin/limpar_competencia/<comp>', methods=['POST'])
 def limpar_competencia(comp):
     if engine:
         try:
             with engine.begin() as conn:
                 conn.execute(text(f"DELETE FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"))
-            flash(f"A competência [{comp}] foi removida com sucesso do Faturamento!", "success")
+            flash(f"Competência [{comp}] excluída cirurgicamente do histórico!", "success")
         except Exception as e:
-            flash(f"Erro ao deletar mês específico: {str(e)}", "error")
+            flash(f"Erro ao remover mês: {str(e)}", "error")
     return redirect(url_for('admin'))
 
 @app.route('/admin_upload', methods=['POST'])
@@ -486,7 +591,7 @@ def admin_upload():
     competencia = request.form.get('competencia')
     
     if not arquivos or all(a.filename == '' for a in arquivos):
-        flash("Nenhum arquivo enviado!", "error")
+        flash("Nenhum arquivo válido foi enviado!", "error")
         return redirect(url_for('admin'))
 
     linhas = 0
@@ -495,26 +600,33 @@ def admin_upload():
         for arquivo in arquivos:
             if arquivo.filename == '': continue
             
-            # --- A MÁGICA ESTÁ AQUI: Adicionado on_bad_lines='skip' ---
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
+                
+                # --- A MÁGICA DO FAREJADOR DE DELIMITADOR '¬' ---
+                linha_teste = arquivo.readline().decode('utf-8', errors='ignore')
+                arquivo.seek(0)
+                delimitador = '¬' if '¬' in linha_teste else None
+                # ------------------------------------------------
+                
                 try: 
-                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8', on_bad_lines='skip')
+                    df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='utf-8', on_bad_lines='skip')
                 except: 
                     arquivo.seek(0)
-                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1', on_bad_lines='skip')
+                    df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='iso-8859-1', on_bad_lines='skip')
             elif arquivo.filename.endswith('.xlsx'): 
                 df = pd.read_excel(arquivo)
             else: 
                 continue
-            # ----------------------------------------------------------
 
             if df.empty: continue
 
-            for col in ['UF', 'AP']:
+            # Alinhamento obrigatório de colunas de localidade
+            for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
+            # Lógica absoluta de desconto concentrado em linha única
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
                 df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
                 tot = df['VLR_DESCONTO_OBTIDO'].sum()
@@ -530,7 +642,7 @@ def admin_upload():
             linhas += len(df)
             primeiro = False
             
-        flash(f"Sucesso! {linhas} linhas totais processadas e salvas na base [{tipo_base}].", "success")
+        flash(f"Sucesso! {linhas} linhas totais gravadas na tabela [{tipo_base}].", "success")
     except Exception as e:
-        flash(f"Erro no processamento de lote: {str(e)}", "error")
+        flash(f"Erro crítico no processamento do lote: {str(e)}", "error")
     return redirect(url_for('admin'))
