@@ -485,7 +485,8 @@ def admin_upload():
     tipo_base = request.form.get('tipo_base')
     competencia = request.form.get('competencia')
     
-    if not archivos or all(a.filename == '' for a in arquivos):
+    # CORRIGIDO AQUI: "arquivos" (com qu) no lugar de "archivos"
+    if not arquivos or all(a.filename == '' for a in arquivos):
         flash("Nenhum arquivo enviado!", "error")
         return redirect(url_for('admin'))
 
