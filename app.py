@@ -11,13 +11,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # =====================================================================
-# CONSTANTES GLOBAIS ---
+# CONSTANTES GLOBAIS
 # =====================================================================
 COL_EVENTO = 'EVENTO'
 COL_VALOR_PAGO = 'VALOR_PAG'
 
 # =====================================================================
-# FUNÇÕES DE PROCESSAMENTO E CRUZAMENTO (Antigo processing.py)
+# FUNÇÕES DE PROCESSAMENTO E CRUZAMENTO
 # =====================================================================
 def _remover_acentos(txt):
     if not txt: return ""
@@ -306,14 +306,16 @@ def admin_upload():
             if not df.empty:
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = total_desconto
 
-        if tipo_base == 'faturamento':
-            if competencia:
-                df['COMPETENCIA'] = competencia
-            df.to_sql('faturamento', con=engine, if_exists='append', index=False)
-            flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.")
-        else:
-            df.to_sql(tipo_base, con=engine, if_exists='replace', index=False)
-            flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.")
+        # --- AQUI ESTÁ A BLINDAGEM DA TRANSAÇÃO DO BANCO ---
+        with engine.begin() as conn:
+            if tipo_base == 'faturamento':
+                if competencia:
+                    df['COMPETENCIA'] = competencia
+                df.to_sql('faturamento', con=conn, if_exists='append', index=False)
+                flash(f"Sucesso! {len(df)} linhas de Faturamento ({competencia}) inseridas no banco.")
+            else:
+                df.to_sql(tipo_base, con=conn, if_exists='replace', index=False)
+                flash(f"Sucesso! Base de {tipo_base} atualizada com {len(df)} linhas.")
 
     except Exception as e:
         flash(f"Erro ao processar arquivo: {str(e)}")
