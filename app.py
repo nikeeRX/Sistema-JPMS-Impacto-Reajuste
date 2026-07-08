@@ -4,7 +4,7 @@ import traceback
 import unicodedata
 import pandas as pd
 import numpy as np
-from flask import Flask, request, render_template_string, redirect, url_for, flash
+from flask import Flask, request, render_template_string, redirect, url_for, flash, send_from_directory
 from sqlalchemy import create_engine
 from dotenv import load_dotenv
 
@@ -105,44 +105,105 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
 engine = create_engine(DATABASE_URL) if DATABASE_URL else None
 
 # =====================================================================
-# CSS E HTML EMBUTIDOS 
+# CSS E HTML EMBUTIDOS (NOVO VISUAL POSTAL SAÚDE)
 # =====================================================================
 CSS_PADRAO = """
 <style>
-    :root { --azul-escuro: #12283f; --verde-ok: #006400; --vermelho-alerta: #cc0000; --fundo: #f4f7f6; }
+    :root { 
+        --azul-postal: #002c52; 
+        --azul-claro: #005a92; 
+        --amarelo-postal: #f9b200; 
+        --verde-ok: #007a33; 
+        --vermelho-alerta: #cc0000; 
+        --fundo: #eef2f5; 
+    }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; }
-    .header { background-color: var(--azul-escuro); color: white; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; }
+    
+    .header { 
+        background-color: var(--azul-postal); 
+        color: white; 
+        padding: 15px 40px; 
+        display: flex; 
+        justify-content: space-between; 
+        align-items: center; 
+        border-bottom: 5px solid var(--amarelo-postal); 
+    }
+    .header-logo-container { display: flex; align-items: center; gap: 20px; }
+    .logo-img { 
+        height: 55px; 
+        background: white; 
+        padding: 8px 15px; 
+        border-radius: 6px; 
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2); 
+    }
+    
     .container { padding: 20px 40px; }
-    .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 4px solid var(--azul-escuro); }
+    .card { 
+        background: white; 
+        padding: 25px; 
+        border-radius: 8px; 
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05); 
+        margin-bottom: 20px; 
+        border-top: 4px solid var(--azul-claro); 
+    }
+    
     .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
     .metric-box { padding: 15px; border: 1px solid #eee; border-radius: 6px; text-align: center; }
     .metric-box h4 { margin: 0 0 10px 0; color: #666; font-size: 0.9em; text-transform: uppercase; }
-    .metric-box .valor { font-size: 1.5em; font-weight: bold; color: var(--azul-escuro); margin-bottom: 5px; }
+    .metric-box .valor { font-size: 1.5em; font-weight: bold; color: var(--azul-postal); margin-bottom: 5px; }
     .metric-box .sub { font-size: 0.85em; color: #888; }
-    .impacto-card { background-color: #fcf8e3; border-top: 4px solid var(--vermelho-alerta); }
+    
+    .impacto-card { background-color: #fff9e6; border-top: 4px solid var(--amarelo-postal); }
+    .impacto-card .valor { color: var(--azul-postal); }
+    
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th { background-color: var(--azul-escuro); color: white; padding: 12px; text-align: left; }
+    th { 
+        background-color: var(--azul-postal); 
+        color: white; 
+        padding: 12px; 
+        text-align: left; 
+        border-bottom: 3px solid var(--amarelo-postal); 
+    }
     td { padding: 10px 12px; border-bottom: 1px solid #eee; }
-    tr:hover { background-color: #f9f9f9; }
-    .btn { background-color: var(--azul-escuro); color: white; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
-    .btn-success { background-color: var(--verde-ok); }
+    tr:hover { background-color: #f4f7f6; }
+    
+    .btn { 
+        background-color: var(--amarelo-postal); 
+        color: var(--azul-postal); 
+        font-weight: bold;
+        padding: 10px 20px; 
+        border: none; 
+        border-radius: 4px; 
+        cursor: pointer; 
+        text-decoration: none; 
+        display: inline-block; 
+        transition: background-color 0.3s;
+    }
+    .btn:hover { background-color: #e0a100; }
+    
+    .btn-success { background-color: var(--azul-claro); color: white; font-weight: normal; }
+    .btn-success:hover { background-color: var(--azul-postal); }
+    
     .form-group { margin-bottom: 15px; }
-    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); }
 </style>
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
 <div class="header">
-    <div>
-        <h2 style="margin:0;">GERED - Sistema de Impacto de Reajuste</h2>
-        <p style="margin:5px 0 0 0; color: #aaa;">Prestador: {{ prestador_nome }} | Competência: {{ periodo_base }}</p>
+    <div class="header-logo-container">
+        <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
+        <div>
+            <h2 style="margin:0;">GERED - Sistema de Impacto de Reajuste</h2>
+            <p style="margin:5px 0 0 0; color: #d4e3ef;">Prestador: {{ prestador_nome }} | Competência: {{ periodo_base }}</p>
+        </div>
     </div>
     <a href="/admin" class="btn">Painel Admin (Uploads)</a>
 </div>
 
 <div class="container">
     <div class="card">
-        <h3 style="margin-top:0; color: #12283f;">Resumo Financeiro Final</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Resumo Financeiro Final</h3>
         <div class="grid-4">
             <div class="metric-box">
                 <h4>Faturamento Total</h4>
@@ -150,12 +211,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
             </div>
             <div class="metric-box">
                 <h4>Total Solicitado</h4>
-                <div class="valor" style="color: #cc0000;">R$ {{ totais.total_solicitado }}</div>
+                <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.total_solicitado }}</div>
                 <div class="sub">{{ totais.pct_solicitado }}% do faturamento</div>
             </div>
             <div class="metric-box">
                 <h4>Total Concedido</h4>
-                <div class="valor" style="color: #006400;">R$ {{ totais.total_concedido }}</div>
+                <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
                 <div class="sub">{{ totais.pct_concedido }}% do faturamento</div>
             </div>
             <div class="metric-box impacto-card">
@@ -166,7 +227,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
     </div>
 
     <div class="card">
-        <h3 style="margin-top:0;">Detalhamento por Item de Configuração</h3>
+        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento por Item de Configuração</h3>
         <table>
             <thead>
                 <tr>
@@ -179,10 +240,10 @@ HTML_DASHBOARD = CSS_PADRAO + """
             <tbody>
                 {% for item in itens_detalhe %}
                 <tr>
-                    <td>{{ item.descricao }}</td>
+                    <td><strong>{{ item.descricao }}</strong></td>
                     <td>R$ {{ item.valor_base }}</td>
-                    <td style="color: #cc0000;">R$ {{ item.delta_solicitado }}</td>
-                    <td style="color: #006400;">R$ {{ item.delta_concedido }}</td>
+                    <td style="color: var(--vermelho-alerta); font-weight: bold;">R$ {{ item.delta_solicitado }}</td>
+                    <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.delta_concedido }}</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -193,16 +254,21 @@ HTML_DASHBOARD = CSS_PADRAO + """
 
 HTML_ADMIN = CSS_PADRAO + """
 <div class="header">
-    <h2 style="margin:0;">Administração do Banco de Dados</h2>
+    <div class="header-logo-container">
+        <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
+        <div>
+            <h2 style="margin:0;">Administração de Banco de Dados</h2>
+        </div>
+    </div>
     <a href="/" class="btn">Voltar ao Dashboard</a>
 </div>
 <div class="container">
-    <div class="card" style="max-width: 600px; margin: 0 auto;">
-        <h3 style="margin-top:0;">Upload de Bases (Parquet / CSV / Excel)</h3>
+    <div class="card" style="max-width: 600px; margin: 0 auto; border-top: 4px solid var(--amarelo-postal);">
+        <h3 style="margin-top:0; color: var(--azul-postal);">Upload de Bases (Parquet / CSV / Excel)</h3>
         {% with messages = get_flashed_messages() %}
           {% if messages %}
             {% for message in messages %}
-              <div style="padding: 10px; background: #d4edda; color: #155724; border-radius: 4px; margin-bottom: 15px;">{{ message }}</div>
+              <div style="padding: 10px; background: #e6f4ea; color: var(--verde-ok); border-radius: 4px; margin-bottom: 15px; border: 1px solid var(--verde-ok);">{{ message }}</div>
             {% endfor %}
           {% endif %}
         {% endwith %}
@@ -210,7 +276,7 @@ HTML_ADMIN = CSS_PADRAO + """
         <form action="/admin_upload" method="post" enctype="multipart/form-data">
             <div class="form-group">
                 <label>Selecione a Base de Destino:</label>
-                <select name="tipo_base" style="width: 100%; padding: 10px;" required>
+                <select name="tipo_base" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;" required>
                     <option value="faturamento">Faturamento (Mês a Mês)</option>
                     <option value="prestadores">Prestadores</option>
                     <option value="materiais">Materiais Perfurocortantes</option>
@@ -222,15 +288,15 @@ HTML_ADMIN = CSS_PADRAO + """
             
             <div class="form-group">
                 <label>Competência (Ex: 2026-04) - Apenas para Faturamento:</label>
-                <input type="text" name="competencia" style="width: 100%; padding: 10px;" placeholder="YYYY-MM">
+                <input type="text" name="competencia" style="width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px;" placeholder="YYYY-MM">
             </div>
 
             <div class="form-group">
                 <label>Arquivo (.parquet, .csv, .xlsx):</label>
-                <input type="file" name="arquivo" style="width: 100%; padding: 10px;" required>
+                <input type="file" name="arquivo" style="width: 100%; padding: 10px; border: 1px dashed var(--azul-claro); border-radius: 4px;" required>
             </div>
             
-            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px;">Processar e Enviar para o Banco</button>
+            <button type="submit" class="btn btn-success" style="width: 100%; margin-top: 10px; font-size: 16px;">Processar e Enviar para o Banco</button>
         </form>
     </div>
 </div>
@@ -239,6 +305,12 @@ HTML_ADMIN = CSS_PADRAO + """
 # =====================================================================
 # ROTAS DA APLICAÇÃO
 # =====================================================================
+
+# Rota especial que "ensina" o Flask a pegar a logo na raiz!
+@app.route('/Logo_Postal-03.png')
+def serve_logo():
+    return send_from_directory(os.getcwd(), 'Logo_Postal-03.png')
+
 @app.route('/')
 def dashboard():
     dados_mock = {
@@ -306,7 +378,6 @@ def admin_upload():
             if not df.empty:
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = total_desconto
 
-        # --- AQUI ESTÁ A BLINDAGEM DA TRANSAÇÃO DO BANCO ---
         with engine.begin() as conn:
             if tipo_base == 'faturamento':
                 if competencia:
