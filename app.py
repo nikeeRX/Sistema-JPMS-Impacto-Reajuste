@@ -485,7 +485,6 @@ def admin_upload():
     tipo_base = request.form.get('tipo_base')
     competencia = request.form.get('competencia')
     
-    # CORRIGIDO AQUI: "arquivos" (com qu) no lugar de "archivos"
     if not arquivos or all(a.filename == '' for a in arquivos):
         flash("Nenhum arquivo enviado!", "error")
         return redirect(url_for('admin'))
@@ -495,14 +494,21 @@ def admin_upload():
     try:
         for arquivo in arquivos:
             if arquivo.filename == '': continue
-            if arquivo.filename.endswith('.parquet'): df = pd.read_parquet(arquivo)
+            
+            # --- A MÁGICA ESTÁ AQUI: Adicionado on_bad_lines='skip' ---
+            if arquivo.filename.endswith('.parquet'): 
+                df = pd.read_parquet(arquivo)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
-                try: df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8')
+                try: 
+                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='utf-8', on_bad_lines='skip')
                 except: 
                     arquivo.seek(0)
-                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1')
-            elif arquivo.filename.endswith('.xlsx'): df = pd.read_excel(arquivo)
-            else: continue
+                    df = pd.read_csv(arquivo, sep=None, engine='python', encoding='iso-8859-1', on_bad_lines='skip')
+            elif arquivo.filename.endswith('.xlsx'): 
+                df = pd.read_excel(arquivo)
+            else: 
+                continue
+            # ----------------------------------------------------------
 
             if df.empty: continue
 
