@@ -46,39 +46,65 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
+# =====================================================================
+# O "PENTE FINO" DE TIPOS E VALORES MÁGICO (A PEDIDO DO DIRETOR!)
+# =====================================================================
 def parse_financial_value(series):
     s = series.astype(str).str.strip().str.upper().str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
-    mask_br = s.str.contains(',') & s.str.contains('\.')
-    s = np.where(mask_br, s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False), s)
-    mask_comma = s.str.contains(',') & ~s.str.contains('\.')
-    s = np.where(mask_comma, s.str.replace(',', '.', regex=False), s)
-    return pd.to_numeric(s, errors='coerce').fillna(0)
+    mask_br = s.str.contains(',', regex=False) & s.str.contains(r'\.', regex=True)
+    s.loc[mask_br] = s.loc[mask_br].str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    mask_comma = s.str.contains(',', regex=False) & ~s.str.contains(r'\.', regex=True)
+    s.loc[mask_comma] = s.loc[mask_comma].str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce').fillna(0.0)
 
-# --- A MÁGICA: PULA COLUNAS COM "NAN" OU "NONE" ---
+def parse_quantity(series):
+    s = series.astype(str).str.strip()
+    s = s.replace(['nan', 'None', 'NaN', '<NA>', 'nat', 'NaT', ''], '0')
+    s = s.str.split('.').str[0].str.split(',').str[0]
+    s = s.str.replace(r'\D', '', regex=True)
+    s = s.replace('', '0')
+    return pd.to_numeric(s, errors='coerce').fillna(0).astype(int)
+
+def format_dataframe_types(df):
+    """ O Leão de Chácara: Penteia toda a base e limpa o lixo sujo do Excel """
+    for col in df.columns:
+        c_upper = str(col).upper()
+        # Regra 1: É Dinheiro? Vira Decimal
+        if any(x in c_upper for x in ["VALOR", "VLR", "CUSTO", "PRECO"]):
+            df[col] = parse_financial_value(df[col])
+        # Regra 2: É Quantidade? Vira Inteiro
+        elif any(x in c_upper for x in ["QTD", "QUANTIDADE", "QUANT"]):
+            df[col] = parse_quantity(df[col])
+        # Regra 3: É o resto? Vira Texto Imaculado (String Limpa)
+        else:
+            s = df[col].astype(str).str.strip()
+            s = s.replace(['nan', 'None', 'NaN', '<NA>', 'nat', 'NaT'], '')
+            s = s.str.replace(r'\.0$', '', regex=True) # Mata o fantasma do .0 no CNPJ
+            df[col] = s
+    return df
+
 def get_clean_col(df, candidates):
+    """ O Caçador da coluna que não é 'nan' """
     res = pd.Series("", index=df.index)
     for cand in candidates:
         c = _find_column(df, [cand])
         if c:
-            temp = df[c].fillna("").astype(str).str.strip()
-            # Se for essas palavras, considera lixo e ignora
+            temp = df[c].astype(str).str.strip()
             invalid = temp.str.lower().isin(["", "nan", "none", "null", "nat", "<na>"])
             mask = (res == "") & (~invalid)
             res.loc[mask] = temp.loc[mask]
     return res
 
-# --- FAREJADOR BLINDADO (Com Lotes e Match Absoluto de CNPJ) ---
+# --- FAREJADOR BLINDADO DE FATURAMENTO ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
     prestadores_encontrados = []
     nomes_encontrados = []
     
-    # Prepara o que o usuário digitou
     cnpj_raw = str(f.get('cnpj_alvo', '')).strip()
     cnpj_formatado = re.sub(r'\D', '', cnpj_raw).lstrip('0')
     nome_alvo = cnpj_raw.upper()
 
     try:
-        # Se for busca Diferenciada, olha a tabela de Prestadores PRIMEIRO
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
             if not df_pre_temp.empty:
@@ -103,7 +129,6 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
-    # Lê a base em pacotes de 100 mil para não matar a memória RAM
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
         
         c_cnpj = get_clean_col(chunk, ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ", "CGC"])
@@ -114,14 +139,12 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
 
         chunk["UF_FILTRO"] = get_clean_col(chunk, ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]).str.upper()
 
-        # Filtra o Pacote!
         if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
             chunk = chunk[chunk['UF_FILTRO'].str.contains(f['uf_alvo'].upper(), na=False)]
             
         elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
             mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados) if prestadores_encontrados else pd.Series(False, index=chunk.index)
             mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados) if nomes_encontrados else pd.Series(False, index=chunk.index)
-            
             mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=chunk.index)
             mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=chunk.index)
             
@@ -159,8 +182,8 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
         grau_col = _find_column(df, ["DESCRICAO_GRAU", "GRAU"])
         
-        df["DESCRICAO_EVENTO"] = df[ds_col].fillna("").astype(str) if ds_col else ""
-        df["_COD_LIMPO_"] = df[ev_col].fillna("").astype(str).apply(normalize_id_digits) if ev_col else ""
+        df["DESCRICAO_EVENTO"] = get_clean_col(df, [ds_col]) if ds_col else ""
+        df["_COD_LIMPO_"] = get_clean_col(df, [ev_col]).apply(normalize_id_digits) if ev_col else ""
         
         df["ORIGEM_INICIAL"] = "Pendente"
         mask = (df["ORIGEM_INICIAL"] == "Pendente")
@@ -171,7 +194,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
             d_ds = _find_column(df_d, ["DESC_EVENTO", "DESCRICAO"])
             
             df["CHAVE"] = df["_COD_LIMPO_"] + "-" + df["DESCRICAO_EVENTO"].apply(_limpar_texto_chave)
-            df_d["CHAVE_DOT"] = df_d[d_ev].fillna("").astype(str).apply(normalize_id_digits) + "-" + df_d[d_ds].fillna("").astype(str).apply(_limpar_texto_chave)
+            df_d["CHAVE_DOT"] = get_clean_col(df_d, [d_ev]).apply(normalize_id_digits) + "-" + get_clean_col(df_d, [d_ds]).apply(_limpar_texto_chave)
             dot_keys = set(df_d["CHAVE_DOT"].unique())
             df.loc[mask, "ORIGEM_INICIAL"] = np.where(df.loc[mask, "CHAVE"].isin(dot_keys), "Dotação", "Faixa de Eventos")
         else: 
@@ -180,13 +203,14 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         def get_ref_codes(rdf, is_dieta=False):
             if rdf is None or rdf.empty: return set()
             c = _find_column(rdf, ["ESTRUTURA", "CODIGO", "EVENTOS"]) if is_dieta else _find_column(rdf, ["EVENTOS", "EVENTO", "ESTRUTURA"])
-            return set(rdf[c or rdf.columns[0]].fillna("").astype(str).apply(normalize_id_digits).unique())
+            return set(get_clean_col(rdf, [c]).apply(normalize_id_digits).unique())
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
         if t_col:
-            df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
+            df["TIPO_DESPESA_FINAL"] = get_clean_col(df, [t_col]).str.upper().str.strip()
+            df.loc[df["TIPO_DESPESA_FINAL"] == "", "TIPO_DESPESA_FINAL"] = "OUTROS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIÁRIAS"
@@ -199,7 +223,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
             df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
         
         if grau_col:
-            mask_anestesista = df[grau_col].fillna("").astype(str).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
+            mask_anestesista = get_clean_col(df, [grau_col]).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
             df.loc[mask_anestesista, "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
 
         df.loc[df["_COD_LIMPO_"].isin(s_diet) & (df["_COD_LIMPO_"] != ""), "TIPO_DESPESA_FINAL"] = "DIETAS"
@@ -1031,7 +1055,7 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
-                comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip() not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
+                comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip().lower() not in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']]
         except: pass
     
     if step in ['1', '2'] and f['comp_list'] and engine:
@@ -1191,7 +1215,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or str(c_name).strip() in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
+                        if not c_name or str(c_name).strip().lower() in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1241,7 +1265,6 @@ def admin_upload():
             
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
-                df = df.astype(str).replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
                 amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
@@ -1257,18 +1280,21 @@ def admin_upload():
 
             if df.empty: continue
             
+            # --- MÁGICA DE PENTE FINO AQUI ANTES DE IR PRO BANCO ---
+            df = format_dataframe_types(df)
+
             for col in ['UF', 'AP', 'CNPJ']:
-                if col not in df.columns: df[col] = None
+                if col not in df.columns: df[col] = ""
             
             if tipo_base == 'faturamento':
                 comp_final = competencia if competencia else nome_arquivo_puro
                 df['COMPETENCIA'] = str(comp_final).strip()
 
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
-                df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
                 tot = df['VLR_DESCONTO_OBTIDO'].sum()
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
-                df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
+                if len(df) > 0:
+                    df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
             if tipo_base == 'faturamento':
                 try:
@@ -1286,6 +1312,6 @@ def admin_upload():
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Base perfeitamente tipada e limpa!", "success")
     except Exception as e: flash(f"Erro crítico no processamento: {str(e)}", "error")
     return redirect(url_for('admin'))
