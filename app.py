@@ -432,7 +432,6 @@ def serve_logo():
 
 @app.route('/')
 def dashboard():
-    # Coleta e higienização dos parâmetros da url para os inputs
     f = {
         'comp': request.args.get('comp', '').strip(),
         'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(),
@@ -463,10 +462,7 @@ def dashboard():
                 try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
                 except: df_pre = pd.DataFrame()
 
-                # Roda o motor de cruzamento estrutural
                 df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
-                
-                # Roda a inteligência do módulo de reajuste financeiro
                 df_final = aplicar_reajustes_simulados(df_cruzado, f)
                 
                 if not df_final.empty:
@@ -482,7 +478,6 @@ def dashboard():
                         'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                     }
 
-                    # Agrupamento das colunas calculadas para exibição estruturada
                     grupo = df_final.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM']).agg(
                         qtd=('VALOR_SOLICITADO', 'count'),
                         v_sol=('VALOR_SOLICITADO', 'sum'),
@@ -604,11 +599,19 @@ def admin_upload():
                 df = pd.read_parquet(arquivo)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
                 
-                # --- A MÁGICA DO FAREJADOR DE DELIMITADOR '¬' ---
-                linha_teste = arquivo.readline().decode('utf-8', errors='ignore')
+                # --- A MÁGICA DO FAREJADOR DE DELIMITADORES TURBINADA ---
+                amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
-                delimitador = '¬' if '¬' in linha_teste else None
-                # ------------------------------------------------
+                
+                if '¬' in amostra:
+                    delimitador = '¬'
+                elif ';' in amostra:
+                    delimitador = ';'
+                elif '\t' in amostra:
+                    delimitador = '\t'
+                else:
+                    delimitador = None
+                # --------------------------------------------------------
                 
                 try: 
                     df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='utf-8', on_bad_lines='skip')
@@ -622,11 +625,9 @@ def admin_upload():
 
             if df.empty: continue
 
-            # Alinhamento obrigatório de colunas de localidade
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
-            # Lógica absoluta de desconto concentrado em linha única
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
                 df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
                 tot = df['VLR_DESCONTO_OBTIDO'].sum()
