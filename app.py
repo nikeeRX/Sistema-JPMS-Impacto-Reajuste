@@ -7,7 +7,7 @@ import numpy as np
 import io
 from datetime import datetime
 from flask import Flask, request, render_template_string, redirect, url_for, flash, send_from_directory, send_file, make_response
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, inspect
 from dotenv import load_dotenv
 from fpdf import FPDF
 
@@ -46,13 +46,10 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
-# --- PARSER FINANCEIRO INTELIGENTE (Resolve o bug do R$ 0,00) ---
 def parse_financial_value(series):
     s = series.astype(str).str.strip().str.upper().str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
-    # Trata formato BR completo: "1.500,50" -> "1500.50"
     mask_br = s.str.contains(',') & s.str.contains('\.')
     s = np.where(mask_br, s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False), s)
-    # Trata formato só vírgula: "1500,50" -> "1500.50"
     mask_comma = s.str.contains(',') & ~s.str.contains('\.')
     s = np.where(mask_comma, s.str.replace(',', '.', regex=False), s)
     return pd.to_numeric(s, errors='coerce').fillna(0)
@@ -61,7 +58,6 @@ def parse_financial_value(series):
 def ler_e_filtrar_faturamento(engine, comp_list, f):
     prestadores_encontrados = []
     nomes_encontrados = []
-    # Pega o CNPJ do input, tira letras/traços e arranca os ZEROS da esquerda para comparar!
     cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', ''))).lstrip('0')
     nome_alvo = str(f.get('cnpj_alvo', '')).strip().upper()
 
@@ -73,7 +69,6 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 col_nome_pre = _find_column(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA"])
                 
                 if col_cnpj_pre:
-                    # Limpa perfeitamente o banco de prestadores (tira .0, tira não-dígitos e tira zero à esquerda)
                     df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
                 if col_nome_pre:
                     df_pre_temp['NOME_LIMPO'] = df_pre_temp[col_nome_pre].fillna("").astype(str).str.upper()
@@ -101,7 +96,6 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
             if c:
                 mask = chunk["CNPJ_FILTRO"] == ""
                 chunk.loc[mask, "CNPJ_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
-        # Limpeza total do CNPJ no Faturamento
         chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
 
         chunk["NOME_FILTRO"] = ""
@@ -484,6 +478,7 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
+<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
@@ -533,9 +528,11 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </div>
         
         <div style="flex-grow: 1;"></div>
+        <!-- FASE 1: Carregar os Dados -->
         <button type="submit" name="step" value="1" class="btn" style="background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px;">Carregar e Cruzar Bases</button>
     </div>
 
+    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
     <div class="main-content">
         <div class="header">
             <h2>Sistema de reajuste de discussão</h2>
@@ -545,6 +542,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <div class="container">
             {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
 
+            <!-- FILTRO DE NEGOCIAÇÃO -->
             <div class="card" style="border-top: none;">
                 <div class="form-group" style="max-width: 400px;">
                     <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
@@ -578,6 +576,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
+            <!-- FASE 2: Mostrar as Abas para Digitar as Taxas -->
             {% if step == '1' or step == '2' %}
             <div class="card" id="div_por_tipo">
                 <h3 style="margin-top:0; color: var(--azul-postal); margin-bottom: 20px;">Definição de Propostas por Origem</h3>
@@ -587,6 +586,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                 </div>
 
+                <!-- ABA 1: DOTAÇÃO -->
                 <div id="tab-dotacao" class="tab-content active">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -607,6 +607,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
+                <!-- ABA 2: FAIXA DE EVENTO -->
                 <div id="tab-faixa" class="tab-content">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -627,6 +628,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
+                <!-- ABA 3: ITENS ESPECÍFICOS -->
                 <div id="tab-especificos" class="tab-content">
                     <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral.</p>
                     <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
@@ -661,11 +663,13 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
             
+            <!-- FASE 3: Botão de Calcular Final -->
             <div style="text-align: right; margin-bottom: 20px;">
                 <button type="submit" name="step" value="2" class="btn btn-success" style="width: auto; padding: 15px 40px; font-size: 1.1em;">CALCULAR ANÁLISE DE IMPACTO</button>
             </div>
             {% endif %}
 
+            <!-- RESULTADOS (Só aparecem após clicar no botão verde de Calcular) -->
             {% if step == '2' %}
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -920,7 +924,6 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR', 'VALORPAGOUNIT', 'VALORAPRESENTADOUNIT', 'VALOR_APRES'])
     if not v_col: return df
 
-    # O PARSER DE DINHEIRO BRASILEIRO ATIVADO AQUI!
     df['VALOR_BASE'] = parse_financial_value(df[v_col])
     
     codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(';') if x.strip()]
@@ -1010,7 +1013,7 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
-                comps_disponiveis = [r[0] for r in res if r[0] and r[0] not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
+                comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip() not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
         except: pass
     
     if step in ['1', '2'] and f['comp_list'] and engine:
@@ -1170,7 +1173,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or c_name in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
+                        if not c_name or str(c_name).strip() in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1194,7 +1197,6 @@ def limpar_competencia():
         try:
             with engine.begin() as conn: 
                 if comp == 'FANTASMA':
-                    # A BAZUCA AUMENTADA PARA ELIMINAR QUALQUER TIPO DE NULO OU FANTASMA
                     conn.execute(text("DELETE FROM faturamento WHERE \"COMPETENCIA\" IS NULL OR \"COMPETENCIA\" IN ('', 'None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA')"))
                     flash("Arquivos fantasmas excluídos com sucesso!", "success")
                 else:
@@ -1219,7 +1221,6 @@ def admin_upload():
             if arquivo.filename == '': continue
             nome_arquivo_puro = os.path.splitext(os.path.basename(arquivo.filename))[0]
             
-            # --- UPLOAD FORÇA BRUTA (DTYPE=STR) PARA EVITAR BUG DE CNPJ E FLOAT ---
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
                 df = df.astype(str).replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
@@ -1250,15 +1251,23 @@ def admin_upload():
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
+            # VACINA ISOLADA: Verifica se a tabela existe antes de alterar para evitar o erro de transação
+            if tipo_base == 'faturamento':
+                try:
+                    insp = inspect(engine)
+                    if insp.has_table('faturamento'):
+                        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as temp_conn:
+                            temp_conn.execute(text('ALTER TABLE faturamento ADD COLUMN IF NOT EXISTS "COMPETENCIA" TEXT;'))
+                except:
+                    pass
+
             with engine.begin() as conn:
                 if tipo_base == 'faturamento':
-                    try: conn.execute(text('ALTER TABLE faturamento ADD COLUMN IF NOT EXISTS "COMPETENCIA" TEXT;'))
-                    except: pass
                     df.to_sql('faturamento', con=conn, if_exists='append', index=False, chunksize=200000)
                 else:
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Todas as colunas formatadas como TEXTO.", "success")
-    except Exception as e: flash(f"Erro: {str(e)}", "error")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
+    except Exception as e: flash(f"Erro crítico no processamento: {str(e)}", "error")
     return redirect(url_for('admin'))
