@@ -42,7 +42,6 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
     try:
         df = df_fat.copy()
         
-        # Garante a preservação de colunas estratégicas de região
         for col in ['UF', 'AP', 'CNPJ']:
             if col not in df.columns:
                 df[col] = None
@@ -76,11 +75,9 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
-        # --- NOVO MOTOR DE PADRONIZAÇÃO DE TIPOS DE DESPESA TISS/TUSS ---
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
         if t_col:
             df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
-            # Mapeamento Inteligente
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIARIAS"
@@ -92,7 +89,6 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         else:
             df["TIPO_DESPESA_FINAL"] = "OUTROS"
         
-        # Sobrescritas Específicas
         if grau_col:
             mask_anestesista = df[grau_col].fillna("").astype(str).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
             df.loc[mask_anestesista, "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
@@ -196,7 +192,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
             <div class="grid-4">
                 <div class="form-group">
                     <label>Competência Alvo (Banco):</label>
-                    <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="YYYY-MM" required>
+                    <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="Digite o nome do arquivo ex: 092024" required>
                 </div>
                 <div class="form-group">
                     <label>Tipo de Negociação:</label>
@@ -338,8 +334,9 @@ HTML_ADMIN = CSS_PADRAO + """
                 </div>
                 
                 <div class="form-group">
-                    <label>Competência (Obrigatório apenas para Faturamento):</label>
-                    <input type="text" name="competencia" style="width: 100%; padding: 10px;" placeholder="Ex: 2026-04">
+                    <label>Competência Fixa (Opcional):</label>
+                    <input type="text" name="competencia" style="width: 100%; padding: 10px;" placeholder="Deixe VAZIO para usar o nome do arquivo">
+                    <small style="color: #666;">Se não preencher, o sistema usará o nome do arquivo (ex: '092024.parquet' vira '092024')</small>
                 </div>
 
                 <div class="form-group">
@@ -482,7 +479,6 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     df['VALOR_SOLICITADO'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     df['VALOR_CONCEDIDO'] = df['VALOR_SOLICITADO'].copy()
 
-    # DICIONÁRIO DE TAXAS CONHECIDAS (Para aplicação cirúrgica)
     taxas_conhecidas = {
         'DIETAS': f['p_dietas'],
         'PERFUROCORTANTES': f['p_perfuro'],
@@ -497,13 +493,11 @@ def aplicar_reajustes_simulados(df_cruzado, f):
         'HONORARIOS': f['p_hon']
     }
 
-    # Aplica as taxas se for um grupo mapeado
     for grupo, taxa in taxas_conhecidas.items():
         if taxa != 0.0:
             mask = df['TIPO_DESPESA_FINAL'] == grupo
             df.loc[mask, 'VALOR_CONCEDIDO'] *= (1 + (taxa / 100))
             
-    # O que sobrar (grupos esquisitos ou genéricos) recebe a taxa "Outros"
     mask_outros = ~df['TIPO_DESPESA_FINAL'].isin(taxas_conhecidas.keys())
     if f['p_outros'] != 0.0:
         df.loc[mask_outros, 'VALOR_CONCEDIDO'] *= (1 + (f['p_outros'] / 100))
@@ -700,6 +694,8 @@ def admin_upload():
         for arquivo in arquivos:
             if arquivo.filename == '': continue
             
+            nome_arquivo_puro = os.path.splitext(os.path.basename(arquivo.filename))[0]
+            
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
@@ -726,9 +722,10 @@ def admin_upload():
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
-            # --- PROTEÇÃO CONTRA A FALTA DE COMPETÊNCIA ---
+            # --- AUTO NOMEAÇÃO DA COMPETÊNCIA PELO ARQUIVO ---
             if tipo_base == 'faturamento':
-                df['COMPETENCIA'] = competencia if competencia else 'SEM_COMPETENCIA'
+                comp_final = competencia if competencia else nome_arquivo_puro
+                df['COMPETENCIA'] = str(comp_final).strip()
 
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
                 df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
