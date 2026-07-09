@@ -51,8 +51,31 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
     try:
         df = df_fat.copy()
         
-        for col in ['UF', 'AP', 'CNPJ', 'NOME_FANTASIA_PRESTADOR']:
-            if col not in df.columns: df[col] = None
+        # --- O FAREJADOR BLINDADO DE COLUNAS (RESOLVE O BUG DO FILTRO VAZIO) ---
+        df["CNPJ_FILTRO"] = ""
+        for cand in ["CNPJ", "PRESTADOR", "CNPJ_EXECUTOR", "CGCCPF", "CPFCNPJ"]:
+            c = _find_column(df, [cand])
+            if c:
+                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = df["CNPJ_FILTRO"] == ""
+                df.loc[mask, "CNPJ_FILTRO"] = temp[mask]
+
+        df["NOME_FILTRO"] = ""
+        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "PRESTADOR"]:
+            c = _find_column(df, [cand])
+            if c:
+                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = df["NOME_FILTRO"] == ""
+                df.loc[mask, "NOME_FILTRO"] = temp[mask]
+
+        df["UF_FILTRO"] = ""
+        for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
+            c = _find_column(df, [cand])
+            if c:
+                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = df["UF_FILTRO"] == ""
+                df.loc[mask, "UF_FILTRO"] = temp[mask]
+        # -----------------------------------------------------------------------
 
         ev_col = _find_column(df, [COL_EVENTO, "EVENTO", "COD_EVENTO", "ESTRUTURA", "CODIGO"])
         ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
@@ -104,7 +127,6 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         df.loc[df["_COD_LIMPO_"].isin(s_diet) & (df["_COD_LIMPO_"] != ""), "TIPO_DESPESA_FINAL"] = "DIETAS"
         df.loc[df["_COD_LIMPO_"].isin(s_perf) & (df["_COD_LIMPO_"] != "") & (df["TIPO_DESPESA_FINAL"] != "DIETAS"), "TIPO_DESPESA_FINAL"] = "PERFUROCORTANTES"
         
-        # CUIDADO: NÃO EXCLUIR O _COD_LIMPO_ AQUI POIS PRECISAMOS DELE PARA A EXCEÇÃO
         return df.drop(columns=["CHAVE"], errors="ignore")
     except:
         traceback.print_exc()
@@ -376,7 +398,6 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
-<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
@@ -429,7 +450,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <button type="submit" class="btn btn-action">Carregar e Cruzar Bases</button>
     </div>
 
-    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
     <div class="main-content">
         <div class="header">
             <h2>Sistema de reajuste de discussão</h2>
@@ -439,7 +459,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <div class="container">
             {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
 
-            <!-- FILTRO DE NEGOCIAÇÃO -->
             <div class="card" style="border-top: none;">
                 <div class="form-group" style="max-width: 400px;">
                     <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
@@ -473,7 +492,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
-            <!-- BLOCO DE TAXAS (COM ABAS) -->
             <div class="card" id="div_por_tipo">
                 <div class="tabs">
                     <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação</button>
@@ -481,7 +499,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                 </div>
 
-                <!-- ABA 1: DOTAÇÃO -->
                 <div id="tab-dotacao" class="tab-content active">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -502,7 +519,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
-                <!-- ABA 2: FAIXA DE EVENTO -->
                 <div id="tab-faixa" class="tab-content">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -523,7 +539,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
-                <!-- ABA 3: ITENS ESPECÍFICOS -->
                 <div id="tab-especificos" class="tab-content">
                     <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral. Eles saem das abas acima e são calculados aqui:</p>
                     <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
@@ -543,7 +558,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
             
-            <!-- BLOCO DINÂMICO: LINEAR -->
             <div id="div_linear" style="display:none; background:#fde8e8; padding:20px; border-radius:8px; border:1px solid var(--vermelho-alerta); margin-bottom:20px;">
                 <h3 style="margin: 0 0 5px 0; color: var(--vermelho-alerta);">Modo Linear Ativado</h3>
                 <p style="font-size:0.9em; color:#666; margin-bottom:15px;">A mesma taxa será aplicada a todas as linhas do faturamento, esmagando regras de Dotação, Faixa e Exceções.</p>
@@ -559,7 +573,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
-            <!-- RESULTADOS -->
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
@@ -780,25 +793,27 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     if not v_col: return df
 
     if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
-        df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
+        df = df[df['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
     elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-        if f['busca_por'] == 'CNPJ': df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+        alvo = str(f['cnpj_alvo']).strip()
+        if f['busca_por'] == 'CNPJ': 
+            df = df[df['CNPJ_FILTRO'].str.contains(alvo, na=False)]
         else:
-            mask_nome = df['NOME_FANTASIA_PRESTADOR'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False, case=False)
-            mask_cnpj = df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)
+            mask_nome = df['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
+            mask_cnpj = df['CNPJ_FILTRO'].str.contains(alvo, na=False)
             df = df[mask_nome | mask_cnpj]
     elif f['tipo_neg'] == 'MISTO':
-        if f['uf_alvo']: df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
+        if f['uf_alvo']: df = df[df['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
         if f['cnpj_alvo']:
-            if f['busca_por'] == 'CNPJ': df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+            alvo = str(f['cnpj_alvo']).strip()
+            if f['busca_por'] == 'CNPJ': df = df[df['CNPJ_FILTRO'].str.contains(alvo, na=False)]
             else:
-                mask_nome = df['NOME_FANTASIA_PRESTADOR'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False, case=False)
-                mask_cnpj = df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)
+                mask_nome = df['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
+                mask_cnpj = df['CNPJ_FILTRO'].str.contains(alvo, na=False)
                 df = df[mask_nome | mask_cnpj]
 
     df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     
-    # 1. Identifica Itens Específicos e "Arranca" eles da Faixa/Dotação
     codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
     df['ORIGEM_CALCULO'] = df['ORIGEM_INICIAL']
     mask_exc = df['_COD_LIMPO_'].isin(codigos_excecao) & (len(codigos_excecao) > 0)
@@ -813,7 +828,6 @@ def aplicar_reajustes_simulados(df_cruzado, f):
             df['TAXA_CONCEDIDA'] = f['conc_linear']
             df['ORIGEM_CALCULO'] = 'Modo Linear'
     else:
-        # Percorre a matriz de Dotação e Faixa para cada tipo de despesa
         for label, key in TIPOS_DESPESA:
             mask_tipo = df['TIPO_DESPESA_FINAL'] == label
             
@@ -825,7 +839,6 @@ def aplicar_reajustes_simulados(df_cruzado, f):
             df.loc[mask_fai, 'TAXA_SOLICITADA'] = f.get(f'sol_fai_{key}', 0.0)
             df.loc[mask_fai, 'TAXA_CONCEDIDA'] = f.get(f'conc_fai_{key}', 0.0)
 
-        # Aplica a regra para a gaveta "Item Específico"
         if mask_exc.any():
             df.loc[mask_exc, 'TAXA_SOLICITADA'] = f['sol_exc']
             df.loc[mask_exc, 'TAXA_CONCEDIDA'] = f['conc_exc']
@@ -920,7 +933,6 @@ def dashboard():
                         'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                     }
 
-                    # Para renderizar os valores do lado dos nomes nas abas
                     base_grp = df_final.groupby(['ORIGEM_CALCULO', 'TIPO_DESPESA_FINAL'])['VALOR_BASE'].sum().to_dict()
                     for (origem, tipo), valor in base_grp.items():
                         if origem not in bases_dict: bases_dict[origem] = {}
