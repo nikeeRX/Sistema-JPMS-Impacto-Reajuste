@@ -44,6 +44,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
     try:
         df = df_fat.copy()
         
+        # Alinhamento das colunas de localidade
         for col in ['UF', 'AP', 'CNPJ']:
             if col not in df.columns:
                 df[col] = None
@@ -77,6 +78,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
+        # Mapeamento e classificação dos tipos de despesa reais
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
         if t_col:
             df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
@@ -104,15 +106,15 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         return pd.DataFrame()
 
 # =====================================================================
-# CLASSE DO PDF (CONFORME CÓDIGO ORIGINAL)
+# CLASSE DO GERADOR DE PDF (BIBLIOTECA FPDF)
 # =====================================================================
 class ReajustePDF(FPDF):
     def header(self):
         if os.path.exists("Logo_Postal-03.png"):
-            self.image("Logo_Postal-03.png", 10, 8, 35) #[cite: 2]
+            self.image("Logo_Postal-03.png", 10, 8, 35)
         self.set_text_color(18, 40, 63)
         self.set_font("Arial", "B", 16)
-        self.cell(0, 10, "Relatorio de Impacto de Reajuste", 0, 1, "R") #[cite: 2]
+        self.cell(0, 10, "Relatorio de Impacto de Reajuste", 0, 1, "R")
         self.set_text_color(0, 0, 0)
         self.ln(10)
 
@@ -120,19 +122,19 @@ class ReajustePDF(FPDF):
         self.set_y(-15)
         self.set_font("Arial", "I", 8)
         self.set_text_color(128, 128, 128)
-        self.cell(0, 10, f"Pagina {self.page_no()} | Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 0, "C") #[cite: 2]
+        self.cell(0, 10, f"Pagina {self.page_no()} | Gerado em {datetime.now().strftime('%d/%m/%Y %H:%M')}", 0, 0, "C")
 
 def build_analysis_pdf_bytes(data: dict) -> bytes:
     pdf = ReajustePDF()
-    pdf.add_page() #[cite: 2]
+    pdf.add_page()
     
     pdf.set_font("Arial", "B", 11)
     pdf.set_fill_color(245, 245, 245)
-    pdf.cell(0, 8, f"  DADOS DO PROCESSO", 0, 1, "L", fill=True) #[cite: 2]
+    pdf.cell(0, 8, "  DADOS DO PROCESSO", 0, 1, "L", fill=True)
     pdf.set_font("Arial", "", 10)
     pdf.cell(0, 7, f"Competencia Analisada: {data.get('comp', '-')}", 0, 1, "L")
-    pdf.cell(0, 7, f"UF: {data.get('uf_alvo', 'N/A')}", 0, 1, "L")
-    pdf.cell(0, 7, f"CNPJ Alvo: {data.get('cnpj_alvo', 'N/A')}", 0, 1, "L")
+    pdf.cell(0, 7, f"UF Alvo: {data.get('uf_alvo', 'TODAS')}", 0, 1, "L")
+    pdf.cell(0, 7, f"CNPJ Alvo: {data.get('cnpj_alvo', 'TODOS')}", 0, 1, "L")
     pdf.ln(5)
 
     categorias = {}
@@ -144,15 +146,15 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     for cat, itens in categorias.items():
         pdf.set_font("Arial", "B", 11)
         pdf.set_text_color(18, 40, 63)
-        pdf.cell(0, 10, f">> {cat.upper()}", 0, 1, "L") #[cite: 2]
+        pdf.cell(0, 10, f">> ORIGEM DA REGRA: {cat.upper()}", 0, 1, "L")
         
         pdf.set_text_color(255, 255, 255)
         pdf.set_fill_color(18, 40, 63)
         pdf.set_font("Arial", "B", 9)
-        pdf.cell(85, 8, " Descricao / Item", 1, 0, "L", fill=True) #[cite: 2]
-        pdf.cell(33, 8, "Valor Base", 1, 0, "C", fill=True) #[cite: 2]
-        pdf.cell(33, 8, "Impacto Sol.", 1, 0, "C", fill=True) #[cite: 2]
-        pdf.cell(33, 8, "Impacto Conc.", 1, 1, "C", fill=True) #[cite: 2]
+        pdf.cell(75, 8, " Grupo de Despesa", 1, 0, "L", fill=True)
+        pdf.cell(38, 8, "Base Lida", 1, 0, "C", fill=True)
+        pdf.cell(38, 8, "Solicitado", 1, 0, "C", fill=True)
+        pdf.cell(38, 8, "Concedido", 1, 1, "C", fill=True)
         
         pdf.set_text_color(0, 0, 0)
         pdf.set_font("Arial", "", 8)
@@ -161,17 +163,17 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
             if fill: pdf.set_fill_color(250, 250, 250)
             else: pdf.set_fill_color(255, 255, 255)
             
-            tipo_txt = str(item["tipo"])[:55]
-            pdf.cell(85, 7, f" {tipo_txt}", 1, 0, "L", fill=True)
-            pdf.cell(33, 7, f"R$ {item['valor']:,.2f} ", 1, 0, "R", fill=True)
-            pdf.cell(33, 7, f"R$ {item['delta_solicitado']:,.2f} ", 1, 0, "R", fill=True)
-            pdf.cell(33, 7, f"R$ {item['delta_concedido']:,.2f} ", 1, 1, "R", fill=True)
+            tipo_txt = str(item["tipo"])[:50]
+            pdf.cell(75, 7, f" {tipo_txt}", 1, 0, "L", fill=True)
+            pdf.cell(38, 7, f"R$ {item['valor']:,.2f} ", 1, 0, "R", fill=True)
+            pdf.cell(38, 7, f"R$ {item['delta_solicitado']:,.2f} ", 1, 0, "R", fill=True)
+            pdf.cell(38, 7, f"R$ {item['delta_concedido']:,.2f} ", 1, 1, "R", fill=True)
         pdf.ln(5)
 
-    if pdf.get_y() > 180: pdf.add_page()
+    if pdf.get_y() > 200: pdf.add_page()
     pdf.set_font("Arial", "B", 12)
     pdf.set_text_color(18, 40, 63)
-    pdf.cell(0, 10, "RESUMO DO IMPACTO", "B", 1, "L") #[cite: 2]
+    pdf.cell(0, 10, "RESUMO FINANCEIRO", "B", 1, "L")
     pdf.ln(2)
     
     pdf.set_text_color(0, 0, 0)
@@ -181,35 +183,23 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     sol_total = totals.get('total_solicited', 0)
     conc_total = totals.get('total_conceded', 0)
     custo_evitado = totals.get('custo_evitado', 0)
-    
-    pct_sol = (sol_total / fat_total * 100) if fat_total > 0 else 0
-    pct_conc = (conc_total / fat_total * 100) if fat_total > 0 else 0
-    pct_evitado = (custo_evitado / fat_total * 100) if fat_total > 0 else 0
-    pct_negociacao = ((conc_total / sol_total) - 1) * 100 if sol_total > 0 else 0
 
     pdf.cell(100, 8, "Faturamento Total Lido (Base):", 0, 0)
     pdf.cell(0, 8, f"R$ {fat_total:,.2f}", 0, 1, "R")
     
     pdf.cell(100, 8, "Total do Reajuste Solicitado:", 0, 0)
-    pdf.cell(0, 8, f"R$ {sol_total:,.2f} ({pct_sol:.2f}%)", 0, 1, "R") #[cite: 2]
+    pdf.cell(0, 8, f"R$ {sol_total:,.2f}", 0, 1, "R")
     
     pdf.cell(100, 8, "Total do Reajuste Concedido:", 0, 0)
-    pdf.cell(0, 8, f"R$ {conc_total:,.2f} ({pct_conc:.2f}%)", 0, 1, "R") #[cite: 2]
+    pdf.cell(0, 8, f"R$ {conc_total:,.2f}", 0, 1, "R")
     
     pdf.set_font("Arial", "B", 11)
     if custo_evitado > 0: pdf.set_text_color(0, 100, 0)
     else: pdf.set_text_color(200, 0, 0)
 
-    pdf.cell(100, 10, "CUSTO EVITADO:", 0, 0) #[cite: 2]
-    pdf.cell(0, 10, f"R$ {custo_evitado:,.2f}", 0, 1, "R") #[cite: 2]
+    pdf.cell(100, 10, "CUSTO EVITADO (ECONOMIA):", 0, 0)
+    pdf.cell(0, 10, f"R$ {custo_evitado:,.2f}", 0, 1, "R")
     
-    pdf.set_font("Arial", "B", 11)
-    if pct_negociacao < 0: pdf.set_text_color(0, 100, 0)
-    else: pdf.set_text_color(200, 0, 0)
-    pdf.cell(100, 10, "EFICIENCIA DA NEGOCIACAO:", 0, 0) #[cite: 2]
-    pdf.cell(0, 10, f"{pct_negociacao:.2f}%", 0, 1, "R") #[cite: 2]
-    pdf.ln(10)
-
     return pdf.output(dest="S").encode("latin-1", errors="ignore")
 
 # =====================================================================
@@ -243,7 +233,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# HTML DASHBOARD
+# HTML DASHBOARD (Com opções de Solicitado x Concedido e Botão PDF)
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -270,7 +260,8 @@ CSS_PADRAO = """
     .btn:hover { background-color: #e0a100; }
     .btn-success { background-color: var(--verde-ok); color: white; }
     .btn-danger { background-color: var(--vermelho-alerta); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
-    .btn-pdf { background-color: #cc0000; color: white; margin-left: 10px;}
+    .btn-pdf { background-color: #cc0000; color: white; margin-left: 10px; }
+    .btn-pdf:hover { background-color: #990000; }
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
     .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
@@ -359,8 +350,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
             {% if tem_dados %}
             <div>
                 {% set export_params = 'comp='~filtros.comp~'&tipo_neg='~filtros.tipo_neg~'&uf_alvo='~filtros.uf_alvo~'&cnpj_alvo='~filtros.cnpj_alvo~'&sol_dotacao='~filtros.sol_dotacao~'&conc_dotacao='~filtros.conc_dotacao~'&sol_faixa='~filtros.sol_faixa~'&conc_faixa='~filtros.conc_faixa~'&p_dietas='~filtros.p_dietas~'&p_perfuro='~filtros.p_perfuro~'&p_anest='~filtros.p_anest~'&p_mat='~filtros.p_mat~'&p_med='~filtros.p_med~'&p_dia='~filtros.p_dia~'&p_taxa='~filtros.p_taxa~'&p_gas='~filtros.p_gas~'&p_opme='~filtros.p_opme~'&p_sadt='~filtros.p_sadt~'&p_hon='~filtros.p_hon~'&p_outros='~filtros.p_outros %}
-                <a href="/exportar?{{ export_params }}" class="btn btn-success">📥 Excel</a>
-                <a href="/exportar_pdf?{{ export_params }}" class="btn btn-pdf" target="_blank">📄 PDF</a>
+                <a href="/exportar?{{ export_params }}" class="btn btn-success">📥 Baixar Excel</a>
+                <a href="/exportar_pdf?{{ export_params }}" class="btn btn-pdf" target="_blank">📄 Baixar PDF Oficial</a>
             </div>
             {% endif %}
         </div>
@@ -369,7 +360,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
             <div class="metric-box">
                 <h4>Faturamento Lido (Base)</h4>
                 <div class="valor">R$ {{ totais.faturamento_total }}</div>
-                <div class="sub">{{ totais.linhas_faturamento }} linhas processadas</div>
+                <div class="sub">{{ totais.linhas_faturamento }} linhas aplicadas</div>
             </div>
             <div class="metric-box">
                 <h4>Total Solicitado</h4>
@@ -379,12 +370,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
             <div class="metric-box">
                 <h4>Total Concedido</h4>
                 <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
-                <div class="sub">Com regras e exceções</div>
+                <div class="sub">Com regras e exceções aplicadas</div>
             </div>
             <div class="metric-box impacto-card">
                 <h4>Custo Evitado (Economia)</h4>
                 <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.custo_evitado }}</div>
-                <div class="sub">Solicitado - Concedido</div>
+                <div class="sub">Diferença salva na negociação</div>
             </div>
         </div>
     </div>
@@ -595,11 +586,11 @@ def aplicar_reajustes_simulados(df_cruzado, f):
 
     df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     
-    # REGRA GERAL (Origem)
+    # REGRA GERAL (Baseado na Origem)
     df['TAXA_SOLICITADA'] = np.where(df['ORIGEM'] == 'Dotação', f['sol_dotacao'], f['sol_faixa'])
     df['TAXA_CONCEDIDA'] = np.where(df['ORIGEM'] == 'Dotação', f['conc_dotacao'], f['conc_faixa'])
 
-    # EXCEÇÕES (Tipos de Despesa sobrescrevem o Concedido se preenchidos)
+    # EXCEÇÕES (Substituem a taxa concedida caso o campo esteja preenchido e seja diferente de 0.0)
     taxas_conhecidas = {
         'DIETAS': f['p_dietas'], 'PERFUROCORTANTES': f['p_perfuro'], 'ANESTESISTA': f['p_anest'],
         'MATERIAIS': f['p_mat'], 'MEDICAMENTOS': f['p_med'], 'DIARIAS': f['p_dia'],
