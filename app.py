@@ -54,99 +54,95 @@ def parse_financial_value(series):
     s = np.where(mask_comma, s.str.replace(',', '.', regex=False), s)
     return pd.to_numeric(s, errors='coerce').fillna(0)
 
-# --- FAREJADOR BLINDADO (Com Lotes, Zeros à Esquerda e Cruzamento) ---
+# --- A MÁGICA: PULA COLUNAS COM "NAN" OU "NONE" ---
+def get_clean_col(df, candidates):
+    res = pd.Series("", index=df.index)
+    for cand in candidates:
+        c = _find_column(df, [cand])
+        if c:
+            temp = df[c].fillna("").astype(str).str.strip()
+            # Se for essas palavras, considera lixo e ignora
+            invalid = temp.str.lower().isin(["", "nan", "none", "null", "nat", "<na>"])
+            mask = (res == "") & (~invalid)
+            res.loc[mask] = temp.loc[mask]
+    return res
+
+# --- FAREJADOR BLINDADO (Com Lotes e Match Absoluto de CNPJ) ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
     prestadores_encontrados = []
     nomes_encontrados = []
-    cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', ''))).lstrip('0')
-    nome_alvo = str(f.get('cnpj_alvo', '')).strip().upper()
+    
+    # Prepara o que o usuário digitou
+    cnpj_raw = str(f.get('cnpj_alvo', '')).strip()
+    cnpj_formatado = re.sub(r'\D', '', cnpj_raw).lstrip('0')
+    nome_alvo = cnpj_raw.upper()
 
     try:
+        # Se for busca Diferenciada, olha a tabela de Prestadores PRIMEIRO
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
             if not df_pre_temp.empty:
-                col_cnpj_pre = _find_column(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR"])
-                col_nome_pre = _find_column(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA"])
+                c_cnpj = get_clean_col(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR", "CGC"])
+                df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
                 
-                if col_cnpj_pre:
-                    df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                if col_nome_pre:
-                    df_pre_temp['NOME_LIMPO'] = df_pre_temp[col_nome_pre].fillna("").astype(str).str.upper()
+                c_nome = get_clean_col(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA", "NOME"])
+                df_pre_temp['NOME_LIMPO'] = c_nome.str.upper()
 
-                if f['busca_por'] == 'CNPJ' and col_cnpj_pre:
-                    mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
-                elif f['busca_por'] != 'CNPJ':
-                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if col_nome_pre else pd.Series(False, index=df_pre_temp.index)
-                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if col_cnpj_pre else pd.Series(False, index=df_pre_temp.index)
+                if f['busca_por'] == 'CNPJ':
+                    if cnpj_formatado:
+                        mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                        prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
+                else:
+                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=df_pre_temp.index)
+                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=df_pre_temp.index)
                     prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
-                    if col_nome_pre:
-                        nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
+                    nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
     except: pass
 
     format_strings = ','.join([f"'{c}'" for c in comp_list])
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
+    # Lê a base em pacotes de 100 mil para não matar a memória RAM
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
         
-        chunk["CNPJ_FILTRO"] = ""
-        for cand in ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["CNPJ_FILTRO"] == ""
-                chunk.loc[mask, "CNPJ_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
-        chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+        c_cnpj = get_clean_col(chunk, ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ", "CGC"])
+        chunk['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
 
-        chunk["NOME_FILTRO"] = ""
-        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["NOME_FILTRO"] == ""
-                chunk.loc[mask, "NOME_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str).str.upper()
+        c_nome = get_clean_col(chunk, ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "NOME"])
+        chunk["NOME_FILTRO"] = c_nome.str.upper()
 
-        chunk["UF_FILTRO"] = ""
-        for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["UF_FILTRO"] == ""
-                chunk.loc[mask, "UF_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
+        chunk["UF_FILTRO"] = get_clean_col(chunk, ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]).str.upper()
 
+        # Filtra o Pacote!
         if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
-            chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
+            chunk = chunk[chunk['UF_FILTRO'].str.contains(f['uf_alvo'].upper(), na=False)]
             
         elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-            if prestadores_encontrados or nomes_encontrados:
-                mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
-                mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
-                mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
+            mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados) if prestadores_encontrados else pd.Series(False, index=chunk.index)
+            mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados) if nomes_encontrados else pd.Series(False, index=chunk.index)
+            
+            mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=chunk.index)
+            mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=chunk.index)
+            
+            if f['busca_por'] == 'CNPJ':
+                chunk = chunk[mask_pre_cnpj | mask_direta_cnpj]
             else:
-                if f['busca_por'] == 'CNPJ': 
-                    chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
-                else:
-                    mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                    mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    chunk = chunk[mask_nome | mask_cnpj]
+                chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
                 
         elif f['tipo_neg'] == 'MISTO':
             if f['uf_alvo']: 
-                chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
+                chunk = chunk[chunk['UF_FILTRO'].str.contains(f['uf_alvo'].upper(), na=False)]
             if f['cnpj_alvo']:
-                if prestadores_encontrados or nomes_encontrados:
-                    mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
-                    mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
-                    mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                    chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
+                mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados) if prestadores_encontrados else pd.Series(False, index=chunk.index)
+                mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados) if nomes_encontrados else pd.Series(False, index=chunk.index)
+                mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=chunk.index)
+                mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=chunk.index)
+                
+                if f['busca_por'] == 'CNPJ':
+                    chunk = chunk[mask_pre_cnpj | mask_direta_cnpj]
                 else:
-                    if f['busca_por'] == 'CNPJ': 
-                        chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
-                    else:
-                        mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                        mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                        chunk = chunk[mask_nome | mask_cnpj]
+                    chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
         
         if not chunk.empty:
             df_list.append(chunk)
@@ -462,10 +458,10 @@ CSS_PADRAO = """
         var divTipo = document.getElementById('div_por_tipo');
         var divLinear = document.getElementById('div_linear');
         if (modo === 'LINEAR') {
-            divTipo.style.display = 'none';
+            if (divTipo) divTipo.style.display = 'none';
             if (divLinear) divLinear.style.display = 'block';
         } else {
-            divTipo.style.display = 'block';
+            if (divTipo) divTipo.style.display = 'block';
             if (divLinear) divLinear.style.display = 'none';
         }
     }
@@ -478,6 +474,7 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
+<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
@@ -527,9 +524,11 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </div>
         
         <div style="flex-grow: 1;"></div>
+        <!-- FASE 1: Carregar os Dados -->
         <button type="submit" name="step" value="1" class="btn" style="background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px;">Carregar e Cruzar Bases</button>
     </div>
 
+    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
     <div class="main-content">
         <div class="header">
             <h2>Sistema de reajuste de discussão</h2>
@@ -539,6 +538,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <div class="container">
             {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
 
+            <!-- FILTRO DE NEGOCIAÇÃO -->
             <div class="card" style="border-top: none;">
                 <div class="form-group" style="max-width: 400px;">
                     <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
@@ -572,8 +572,10 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
+            <!-- FASE 2: Validação Inicial e Abas de Taxas -->
             {% if step == '1' or step == '2' %}
                 {% if tem_dados %}
+                    <!-- PAINEL DE VALIDAÇÃO INICIAL -->
                     <div class="card" style="background-color: var(--azul-postal); color: white; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
                             <div>
@@ -596,6 +598,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                             <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                         </div>
 
+                        <!-- ABA 1: DOTAÇÃO -->
                         <div id="tab-dotacao" class="tab-content active">
                             <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
                             {% for label, key in tipos_despesa %}
@@ -616,6 +619,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                             {% endfor %}
                         </div>
 
+                        <!-- ABA 2: FAIXA DE EVENTO -->
                         <div id="tab-faixa" class="tab-content">
                             <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
                             {% for label, key in tipos_despesa %}
@@ -636,6 +640,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                             {% endfor %}
                         </div>
 
+                        <!-- ABA 3: ITENS ESPECÍFICOS -->
                         <div id="tab-especificos" class="tab-content">
                             <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral.</p>
                             <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
@@ -670,10 +675,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         </div>
                     </div>
                     
+                    <!-- FASE 3: Botão de Calcular Final -->
                     <div style="text-align: right; margin-bottom: 20px;">
                         <button type="submit" name="step" value="2" class="btn btn-success" style="width: auto; padding: 15px 40px; font-size: 1.1em;">CALCULAR ANÁLISE DE IMPACTO</button>
                     </div>
                 {% else %}
+                    <!-- TRAVA DE SEGURANÇA SE NÃO ACHAR NADA -->
                     <div class="alert alert-danger" style="background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;">
                         <strong style="font-size: 1.1em;">⚠️ Atenção: Nenhum faturamento localizado!</strong><br><br>
                         O sistema não encontrou valores para os filtros selecionados. 
@@ -682,6 +689,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 {% endif %}
             {% endif %}
 
+            <!-- RESULTADOS (Só aparecem após clicar no botão verde de Calcular) -->
             {% if step == '2' and tem_dados %}
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -758,7 +766,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
 """
 
 # =====================================================================
-# HTML ADMIN (RESTAURADO PARA O PADRÃO ORIGINAL)
+# HTML ADMIN
 # =====================================================================
 HTML_ADMIN = """
 <!DOCTYPE html>
@@ -1023,7 +1031,6 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
-                # Pula os fantasmas na tela principal
                 comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip() not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
         except: pass
     
@@ -1249,6 +1256,7 @@ def admin_upload():
             else: continue
 
             if df.empty: continue
+            
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
