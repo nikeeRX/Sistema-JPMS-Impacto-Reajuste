@@ -14,8 +14,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copia o resto do teu código
 COPY . .
 
-# Garante que sempre exista um número de porta válido (O Railway sobrepõe isso se precisar)
+# Garante que sempre exista um número de porta válido
 ENV PORT=5000
 
-# Comando limpo, sem aspas duplas complexas, para o Linux ler a variável perfeitamente
-CMD gunicorn app:app -b 0.0.0.0:$PORT --timeout 120 --workers 1 --preload
+# O PULO DO GATO: Timeout aumentado de 120 para 600 segundos (10 minutos)!
+CMD gunicorn app:app -b 0.0.0.0:$PORT --timeout 600 --workers 1 --preload
