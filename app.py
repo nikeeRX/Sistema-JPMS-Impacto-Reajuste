@@ -46,29 +46,38 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
-# --- FAREJADOR BLINDADO (Com Cruzamento com Base de Prestadores) ---
+# --- PARSER FINANCEIRO INTELIGENTE (Resolve o bug do R$ 0,00) ---
+def parse_financial_value(series):
+    s = series.astype(str).str.strip().str.upper().str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
+    # Trata formato BR completo: "1.500,50" -> "1500.50"
+    mask_br = s.str.contains(',') & s.str.contains('\.')
+    s = np.where(mask_br, s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False), s)
+    # Trata formato só vírgula: "1500,50" -> "1500.50"
+    mask_comma = s.str.contains(',') & ~s.str.contains('\.')
+    s = np.where(mask_comma, s.str.replace(',', '.', regex=False), s)
+    return pd.to_numeric(s, errors='coerce').fillna(0)
+
+# --- FAREJADOR BLINDADO (Com Lotes, Zeros à Esquerda e Cruzamento) ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
-    # PRE-CRUZAMENTO: Busca o Prestador na Base de Cadastro primeiro!
     prestadores_encontrados = []
     nomes_encontrados = []
-    cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', '')))
+    # Pega o CNPJ do input, tira letras/traços e arranca os ZEROS da esquerda para comparar!
+    cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', ''))).lstrip('0')
     nome_alvo = str(f.get('cnpj_alvo', '')).strip().upper()
 
     try:
-        # Se for busca Diferenciada/Mista, caçamos o cara na base de prestadores
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
             if not df_pre_temp.empty:
-                # Padroniza as colunas de busca do Prestador
                 col_cnpj_pre = _find_column(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR"])
                 col_nome_pre = _find_column(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA"])
                 
                 if col_cnpj_pre:
-                    df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\D', '', regex=True)
+                    # Limpa perfeitamente o banco de prestadores (tira .0, tira não-dígitos e tira zero à esquerda)
+                    df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
                 if col_nome_pre:
                     df_pre_temp['NOME_LIMPO'] = df_pre_temp[col_nome_pre].fillna("").astype(str).str.upper()
 
-                # Filtra na base de prestadores
                 if f['busca_por'] == 'CNPJ' and col_cnpj_pre:
                     mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
                     prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
@@ -78,26 +87,23 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                     prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
                     if col_nome_pre:
                         nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
-    except:
-        pass # Segue o jogo se falhar e tenta achar direto no faturamento
+    except: pass
 
-    # CARREGAMENTO DO FATURAMENTO EM LOTES
     format_strings = ','.join([f"'{c}'" for c in comp_list])
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
         
-        # Unifica CNPJ do faturamento (para bater com a busca que fizemos em Prestadores)
         chunk["CNPJ_FILTRO"] = ""
         for cand in ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ"]:
             c = _find_column(chunk, [cand])
             if c:
                 mask = chunk["CNPJ_FILTRO"] == ""
                 chunk.loc[mask, "CNPJ_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
-        chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\D', '', regex=True)
+        # Limpeza total do CNPJ no Faturamento
+        chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
 
-        # Unifica Nomes
         chunk["NOME_FILTRO"] = ""
         for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR"]:
             c = _find_column(chunk, [cand])
@@ -105,7 +111,6 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 mask = chunk["NOME_FILTRO"] == ""
                 chunk.loc[mask, "NOME_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str).str.upper()
 
-        # Unifica UF
         chunk["UF_FILTRO"] = ""
         for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
             c = _find_column(chunk, [cand])
@@ -113,23 +118,17 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 mask = chunk["UF_FILTRO"] == ""
                 chunk.loc[mask, "UF_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
 
-        # Aplica o Filtro Final
         if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
             chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
             
         elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-            # Se achou na base de Prestadores, cruza e filtra exato!
             if prestadores_encontrados or nomes_encontrados:
                 mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
                 mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
-                
-                # Mas também tenta achar direto no faturamento como fallback de segurança
                 mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
                 mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                
                 chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
             else:
-                # Se não tem base de prestadores, vai na força bruta do faturamento
                 if f['busca_por'] == 'CNPJ': 
                     chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
                 else:
@@ -365,7 +364,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# HTML DASHBOARD (Com Controle de Fases)
+# HTML DASHBOARD 
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -894,7 +893,7 @@ HTML_ADMIN = """
                 document.getElementById('progress-bar').style.width = percent + '%';
                 if (percent < 100) { document.getElementById('progress-text').innerText = 'Enviando arquivos: ' + percent + '%'; } 
                 else {
-                    document.getElementById('progress-text').innerText = 'Upload 100%! O BD está processando em lotes de 200.000...';
+                    document.getElementById('progress-text').innerText = 'Upload 100%! O BD está processando em lotes...';
                     document.getElementById('progress-bar').style.backgroundColor = 'var(--amarelo-postal)';
                 }
             }
@@ -921,9 +920,9 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR', 'VALORPAGOUNIT', 'VALORAPRESENTADOUNIT', 'VALOR_APRES'])
     if not v_col: return df
 
-    df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
+    # O PARSER DE DINHEIRO BRASILEIRO ATIVADO AQUI!
+    df['VALOR_BASE'] = parse_financial_value(df[v_col])
     
-    # O Extrator de Códigos Específicos (Arranca de Faixa/Dotação)
     codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(';') if x.strip()]
     if not codigos_excecao: 
         codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
@@ -1011,13 +1010,11 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
-                # Pula os fantasmas na tela principal
-                comps_disponiveis = [r[0] for r in res if r[0] and r[0] not in ['None', 'NaN', 'SEM_COMPETENCIA', '']]
+                comps_disponiveis = [r[0] for r in res if r[0] and r[0] not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
         except: pass
     
     if step in ['1', '2'] and f['comp_list'] and engine:
         try:
-            # Farejador Dinâmico Blindado (em Lotes)
             df_fat = ler_e_filtrar_faturamento(engine, f['comp_list'], f)
             
             if not df_fat.empty:
@@ -1034,7 +1031,6 @@ def dashboard():
 
                 df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
                 
-                # Se for só o step 1 (Carregar), as taxas são zeradas. Se for step 2 (Calcular), usa as da tela
                 f_calc = f.copy()
                 if step == '1':
                     for k in f_calc:
@@ -1057,7 +1053,6 @@ def dashboard():
                         'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                     }
 
-                    # Renderiza os valores na aba
                     base_grp = df_final.groupby(['ORIGEM_CALCULO', 'TIPO_DESPESA_FINAL'])['VALOR_BASE'].sum().to_dict()
                     for (origem, tipo), valor in base_grp.items():
                         if origem not in bases_dict: bases_dict[origem] = {}
@@ -1175,7 +1170,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or c_name in ['None', 'NaN', 'SEM_COMPETENCIA', '']:
+                        if not c_name or c_name in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1199,7 +1194,8 @@ def limpar_competencia():
         try:
             with engine.begin() as conn: 
                 if comp == 'FANTASMA':
-                    conn.execute(text("DELETE FROM faturamento WHERE \"COMPETENCIA\" IS NULL OR \"COMPETENCIA\" IN ('', 'None', 'NaN', 'SEM_COMPETENCIA')"))
+                    # A BAZUCA AUMENTADA PARA ELIMINAR QUALQUER TIPO DE NULO OU FANTASMA
+                    conn.execute(text("DELETE FROM faturamento WHERE \"COMPETENCIA\" IS NULL OR \"COMPETENCIA\" IN ('', 'None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA')"))
                     flash("Arquivos fantasmas excluídos com sucesso!", "success")
                 else:
                     conn.execute(text(f"DELETE FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"))
@@ -1222,16 +1218,22 @@ def admin_upload():
         for arquivo in arquivos:
             if arquivo.filename == '': continue
             nome_arquivo_puro = os.path.splitext(os.path.basename(arquivo.filename))[0]
-            if arquivo.filename.endswith('.parquet'): df = pd.read_parquet(arquivo)
+            
+            # --- UPLOAD FORÇA BRUTA (DTYPE=STR) PARA EVITAR BUG DE CNPJ E FLOAT ---
+            if arquivo.filename.endswith('.parquet'): 
+                df = pd.read_parquet(arquivo)
+                df = df.astype(str).replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
                 amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
                 delimitador = '¬' if '¬' in amostra else ';' if ';' in amostra else '\t' if '\t' in amostra else None
-                try: df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='utf-8', on_bad_lines='skip')
+                try: df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='utf-8', on_bad_lines='skip', dtype=str, keep_default_na=False)
                 except: 
                     arquivo.seek(0)
-                    df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='iso-8859-1', on_bad_lines='skip')
-            elif arquivo.filename.endswith('.xlsx'): df = pd.read_excel(arquivo)
+                    df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='iso-8859-1', on_bad_lines='skip', dtype=str, keep_default_na=False)
+            elif arquivo.filename.endswith('.xlsx'): 
+                df = pd.read_excel(arquivo, dtype=str)
+                df = df.fillna('')
             else: continue
 
             if df.empty: continue
@@ -1257,6 +1259,6 @@ def admin_upload():
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Todas as colunas formatadas como TEXTO.", "success")
     except Exception as e: flash(f"Erro: {str(e)}", "error")
     return redirect(url_for('admin'))
