@@ -46,33 +46,66 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
-# --- O FAREJADOR BLINDADO EM LOTES (Protege a RAM e caça CNPJs ocultos) ---
+# --- FAREJADOR BLINDADO (Com Cruzamento com Base de Prestadores) ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
+    # PRE-CRUZAMENTO: Busca o Prestador na Base de Cadastro primeiro!
+    prestadores_encontrados = []
+    nomes_encontrados = []
+    cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', '')))
+    nome_alvo = str(f.get('cnpj_alvo', '')).strip().upper()
+
+    try:
+        # Se for busca Diferenciada/Mista, caçamos o cara na base de prestadores
+        if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
+            df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
+            if not df_pre_temp.empty:
+                # Padroniza as colunas de busca do Prestador
+                col_cnpj_pre = _find_column(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR"])
+                col_nome_pre = _find_column(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA"])
+                
+                if col_cnpj_pre:
+                    df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\D', '', regex=True)
+                if col_nome_pre:
+                    df_pre_temp['NOME_LIMPO'] = df_pre_temp[col_nome_pre].fillna("").astype(str).str.upper()
+
+                # Filtra na base de prestadores
+                if f['busca_por'] == 'CNPJ' and col_cnpj_pre:
+                    mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                    prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
+                elif f['busca_por'] != 'CNPJ':
+                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if col_nome_pre else pd.Series(False, index=df_pre_temp.index)
+                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if col_cnpj_pre else pd.Series(False, index=df_pre_temp.index)
+                    prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
+                    if col_nome_pre:
+                        nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
+    except:
+        pass # Segue o jogo se falhar e tenta achar direto no faturamento
+
+    # CARREGAMENTO DO FATURAMENTO EM LOTES
     format_strings = ','.join([f"'{c}'" for c in comp_list])
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
-    # Processa de 100 em 100 mil linhas
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
         
-        # 1. Unifica CNPJ (Limpando pontos e traços)
+        # Unifica CNPJ do faturamento (para bater com a busca que fizemos em Prestadores)
         chunk["CNPJ_FILTRO"] = ""
-        for cand in ["CNPJ", "PRESTADOR", "CNPJ_EXECUTOR", "CGCCPF", "CPFCNPJ"]:
+        for cand in ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ"]:
             c = _find_column(chunk, [cand])
             if c:
                 mask = chunk["CNPJ_FILTRO"] == ""
                 chunk.loc[mask, "CNPJ_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
         chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\D', '', regex=True)
 
-        # 2. Unifica Nomes
+        # Unifica Nomes
         chunk["NOME_FILTRO"] = ""
-        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "PRESTADOR"]:
+        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR"]:
             c = _find_column(chunk, [cand])
             if c:
                 mask = chunk["NOME_FILTRO"] == ""
-                chunk.loc[mask, "NOME_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
+                chunk.loc[mask, "NOME_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str).str.upper()
 
-        # 3. Unifica UF
+        # Unifica UF
         chunk["UF_FILTRO"] = ""
         for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
             c = _find_column(chunk, [cand])
@@ -80,32 +113,47 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 mask = chunk["UF_FILTRO"] == ""
                 chunk.loc[mask, "UF_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
 
-        # 4. Aplica os filtros de busca!
+        # Aplica o Filtro Final
         if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
             chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
             
         elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-            alvo_cnpj = re.sub(r'\D', '', str(f['cnpj_alvo']))
-            alvo_nome = str(f['cnpj_alvo']).strip().upper()
-            if f['busca_por'] == 'CNPJ': 
-                chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(alvo_cnpj, na=False)]
+            # Se achou na base de Prestadores, cruza e filtra exato!
+            if prestadores_encontrados or nomes_encontrados:
+                mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
+                mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
+                
+                # Mas também tenta achar direto no faturamento como fallback de segurança
+                mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
+                
+                chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
             else:
-                mask_nome = chunk['NOME_FILTRO'].str.upper().str.contains(alvo_nome, na=False)
-                mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(alvo_cnpj, na=False)
-                chunk = chunk[mask_nome | mask_cnpj]
+                # Se não tem base de prestadores, vai na força bruta do faturamento
+                if f['busca_por'] == 'CNPJ': 
+                    chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
+                else:
+                    mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
+                    mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                    chunk = chunk[mask_nome | mask_cnpj]
                 
         elif f['tipo_neg'] == 'MISTO':
             if f['uf_alvo']: 
                 chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
             if f['cnpj_alvo']:
-                alvo_cnpj = re.sub(r'\D', '', str(f['cnpj_alvo']))
-                alvo_nome = str(f['cnpj_alvo']).strip().upper()
-                if f['busca_por'] == 'CNPJ': 
-                    chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(alvo_cnpj, na=False)]
+                if prestadores_encontrados or nomes_encontrados:
+                    mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
+                    mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
+                    mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                    mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
+                    chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
                 else:
-                    mask_nome = chunk['NOME_FILTRO'].str.upper().str.contains(alvo_nome, na=False)
-                    mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(alvo_cnpj, na=False)
-                    chunk = chunk[mask_nome | mask_cnpj]
+                    if f['busca_por'] == 'CNPJ': 
+                        chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
+                    else:
+                        mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
+                        mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                        chunk = chunk[mask_nome | mask_cnpj]
         
         if not chunk.empty:
             df_list.append(chunk)
@@ -969,7 +1017,7 @@ def dashboard():
     
     if step in ['1', '2'] and f['comp_list'] and engine:
         try:
-            # O FAREJADOR BLINDADO (Puxa os dados em lotes para não estourar a RAM)
+            # Farejador Dinâmico Blindado (em Lotes)
             df_fat = ler_e_filtrar_faturamento(engine, f['comp_list'], f)
             
             if not df_fat.empty:
