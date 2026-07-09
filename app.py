@@ -19,6 +19,13 @@ load_dotenv()
 COL_EVENTO = 'EVENTO'
 COL_VALOR_PAGO = 'VALOR_PAG'
 
+TIPOS_DESPESA = [
+    ('ANESTESISTA', 'anest'), ('CONSULTAS / HONORÁRIOS', 'hon'), ('DIÁRIAS', 'dia'),
+    ('DIETAS', 'dietas'), ('GASES MEDICINAIS', 'gas'), ('MATERIAIS', 'mat'),
+    ('MEDICAMENTOS', 'med'), ('OPME', 'opme'), ('PERFUROCORTANTES', 'perfuro'),
+    ('SADT / EXAMES', 'sadt'), ('TAXAS', 'taxa'), ('OUTROS / GERAL', 'outros')
+]
+
 def _remover_acentos(txt):
     if not txt: return ""
     return "".join(c for c in unicodedata.normalize("NFD", str(txt)) if unicodedata.category(c) != "Mn").upper()
@@ -81,14 +88,14 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
             df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
-            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIARIAS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIÁRIAS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("TAXA", na=False), "TIPO_DESPESA_FINAL"] = "TAXAS"
-            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("GASES", na=False), "TIPO_DESPESA_FINAL"] = "GASES"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("GASES", na=False), "TIPO_DESPESA_FINAL"] = "GASES MEDICINAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("OPME|ORTESE|PROTESE", na=False), "TIPO_DESPESA_FINAL"] = "OPME"
-            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("SADT|EXAME|DIAGNOSTICO|IMAGEM", na=False), "TIPO_DESPESA_FINAL"] = "SADT"
-            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("HONORARIO|CONSULTA|VISITA|MEDICO", na=False), "TIPO_DESPESA_FINAL"] = "HONORARIOS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("SADT|EXAME|DIAGNOSTICO|IMAGEM", na=False), "TIPO_DESPESA_FINAL"] = "SADT / EXAMES"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("HONORARIO|CONSULTA|VISITA|MEDICO", na=False), "TIPO_DESPESA_FINAL"] = "CONSULTAS / HONORÁRIOS"
         else:
-            df["TIPO_DESPESA_FINAL"] = "OUTROS"
+            df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
         
         if grau_col:
             mask_anestesista = df[grau_col].fillna("").astype(str).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
@@ -97,7 +104,8 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         df.loc[df["_COD_LIMPO_"].isin(s_diet) & (df["_COD_LIMPO_"] != ""), "TIPO_DESPESA_FINAL"] = "DIETAS"
         df.loc[df["_COD_LIMPO_"].isin(s_perf) & (df["_COD_LIMPO_"] != "") & (df["TIPO_DESPESA_FINAL"] != "DIETAS"), "TIPO_DESPESA_FINAL"] = "PERFUROCORTANTES"
         
-        return df.drop(columns=["CHAVE", "_COD_LIMPO_"], errors="ignore")
+        # CUIDADO: NÃO EXCLUIR O _COD_LIMPO_ AQUI POIS PRECISAMOS DELE PARA A EXCEÇÃO
+        return df.drop(columns=["CHAVE"], errors="ignore")
     except:
         traceback.print_exc()
         return pd.DataFrame()
@@ -129,7 +137,7 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     pdf.set_fill_color(245, 245, 245)
     pdf.cell(0, 8, "  DADOS DO PROCESSO", 0, 1, "L", fill=True)
     pdf.set_font("Arial", "", 10)
-    pdf.cell(0, 7, f"Competencia Analisada: {data.get('comp', '-')}", 0, 1, "L")
+    pdf.cell(0, 7, f"Competencia(s) Analisada(s): {', '.join(data.get('comp_list', []))}", 0, 1, "L")
     pdf.cell(0, 7, f"Modo de Aplicacao: {data.get('modo_aplicacao', 'POR TIPO')}", 0, 1, "L")
     pdf.cell(0, 7, f"IPCA do Periodo: {data.get('ipca', '0,00')}%", 0, 1, "L")
     pdf.cell(0, 7, f"Tipo de Negociacao: {data.get('tipo_neg', 'TODOS')}", 0, 1, "L")
@@ -148,7 +156,7 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     for cat, itens in categorias.items():
         pdf.set_font("Arial", "B", 11)
         pdf.set_text_color(18, 40, 63)
-        pdf.cell(0, 10, f">> ORIGEM DA REGRA: {cat.upper()}", 0, 1, "L")
+        pdf.cell(0, 10, f">> ORIGEM: {cat.upper()}", 0, 1, "L")
         
         pdf.set_text_color(255, 255, 255)
         pdf.set_fill_color(18, 40, 63)
@@ -256,7 +264,7 @@ CSS_PADRAO = """
     .sidebar { width: 280px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; }
     .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
     
-    .logo-img { max-width: 220px; height: auto; object-fit: contain; margin-bottom: 10px; }
+    .logo-img { max-width: 200px; height: auto; object-fit: contain; margin-bottom: 10px; }
     .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 15px; }
     .sidebar-section h4 { color: var(--azul-postal); margin: 0 0 10px 0; font-size: 1em; }
     
@@ -279,9 +287,9 @@ CSS_PADRAO = """
 
     /* ESTILO DAS ABAS (TABS) */
     .tabs { display: flex; border-bottom: 2px solid #ddd; margin-bottom: 20px; gap: 5px; }
-    .tab-link { padding: 12px 25px; cursor: pointer; font-weight: bold; color: #666; border-bottom: 3px solid transparent; transition: 0.3s; font-size: 0.95em; background: none; border-top: none; border-left: none; border-right: none; }
+    .tab-link { padding: 12px 25px; cursor: pointer; font-weight: bold; color: #666; border-bottom: 3px solid transparent; transition: 0.3s; font-size: 0.95em; background: none; border-top: none; border-left: none; border-right: none; outline: none; }
     .tab-link:hover { color: var(--azul-claro); }
-    .tab-link.active { color: var(--azul-postal); border-bottom-color: var(--amarelo-postal); }
+    .tab-link.active { color: var(--vermelho-alerta); border-bottom-color: var(--vermelho-alerta); }
     .tab-content { display: none; animation: fadeIn 0.3s; }
     .tab-content.active { display: block; }
 
@@ -289,16 +297,18 @@ CSS_PADRAO = """
     .expense-row { display: flex; justify-content: space-between; align-items: center; padding: 12px; border-bottom: 1px solid #eee; transition: background 0.2s; }
     .expense-row:hover { background-color: #f9f9f9; }
     .expense-label { font-weight: bold; color: #333; font-size: 0.9em; flex: 1; }
+    .expense-value { font-weight: normal; color: #666; margin-left: 5px; }
     .expense-inputs { display: flex; gap: 15px; align-items: center; }
     .input-wrapper { display: flex; flex-direction: column; align-items: flex-start; }
     .input-wrapper label { font-size: 0.75em; color: #888; font-weight: normal; margin-bottom: 2px; }
-    .input-wrapper input { width: 100px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; text-align: right; }
+    .input-wrapper input { width: 100px; padding: 6px; border: 1px solid #ccc; border-radius: 4px; text-align: right; background: #fdfdfd; }
 
     .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
     .metric-box { padding: 15px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #fafafa; }
     .metric-box h4 { margin: 0 0 10px 0; color: #666; font-size: 0.85em; text-transform: uppercase; }
     .metric-box .valor { font-size: 1.6em; font-weight: bold; color: var(--azul-postal); margin-bottom: 5px; }
     .metric-box .sub { font-size: 0.85em; color: #888; }
+    .impacto-card { background-color: #fff9e6; border-top: 4px solid var(--amarelo-postal); }
     
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
     th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; font-size: 0.9em; }
@@ -385,8 +395,21 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 <input type="number" step="0.01" name="ipca" class="form-control" value="{{ filtros.ipca }}">
             </div>
             <div class="form-group">
-                <label>Período da Análise (Competência)</label>
-                <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="Ex: 092024" required>
+                <label>Período da Análise (Selecione 1 ou mais)</label>
+                <select name="comp" class="form-control" multiple size="4" required style="height:auto;">
+                    {% for c in comps_disponiveis %}
+                    <option value="{{ c }}" {% if c in filtros.comp_list %}selected{% endif %}>{{ c }}</option>
+                    {% endfor %}
+                </select>
+                <small style="color:#888;">Segure CTRL para selecionar vários</small>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <h4>Exceções por Item Específico</h4>
+            <div class="form-group">
+                <label>Códigos dos Itens (Ex: 10101012)</label>
+                <textarea name="itens_exc" class="form-control" rows="3" placeholder="Digite os códigos separados por vírgula. Eles serão extraídos da Faixa/Dotação.">{{ filtros.itens_exc }}</textarea>
             </div>
         </div>
 
@@ -453,67 +476,70 @@ HTML_DASHBOARD = CSS_PADRAO + """
             <!-- BLOCO DE TAXAS (COM ABAS) -->
             <div class="card" id="div_por_tipo">
                 <div class="tabs">
-                    <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação (Geral)</button>
-                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-faixa')">Faixa de Evento (Geral)</button>
-                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos (Exceções)</button>
+                    <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação</button>
+                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-faixa')">Faixa de Evento</button>
+                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                 </div>
 
                 <!-- ABA 1: DOTAÇÃO -->
                 <div id="tab-dotacao" class="tab-content active">
-                    <p style="color:#666; font-size:0.9em;">Regra base aplicada a todos os itens classificados como Dotação (que não forem extraídos para Itens Específicos).</p>
-                    <div style="display:flex; gap:20px; align-items:center; background:#f4f7f6; padding:20px; border-radius:6px; max-width:400px;">
-                        <div class="input-wrapper">
-                            <label>% Solicitado</label>
-                            <input type="number" step="0.01" name="sol_dotacao" value="{{ filtros.sol_dotacao }}">
+                    <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
+                    {% for label, key in tipos_despesa %}
+                    <div class="expense-row">
+                        <div class="expense-label">
+                            {{ label }} 
+                            {% if bases_dict and bases_dict.get('Dotação', {}).get(label, 0) > 0 %}
+                                <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Dotação'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                            {% else %}
+                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                            {% endif %}
                         </div>
-                        <div class="input-wrapper">
-                            <label>% Concedido</label>
-                            <input type="number" step="0.01" name="conc_dotacao" value="{{ filtros.conc_dotacao }}">
+                        <div class="expense-inputs">
+                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_dot_{{ key }}" value="{{ filtros['sol_dot_'~key] }}"></div>
+                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_dot_{{ key }}" value="{{ filtros['conc_dot_'~key] }}"></div>
                         </div>
                     </div>
+                    {% endfor %}
                 </div>
 
                 <!-- ABA 2: FAIXA DE EVENTO -->
                 <div id="tab-faixa" class="tab-content">
-                    <p style="color:#666; font-size:0.9em;">Regra base aplicada a todos os itens classificados como Faixa de Evento (que não forem extraídos para Itens Específicos).</p>
-                    <div style="display:flex; gap:20px; align-items:center; background:#f4f7f6; padding:20px; border-radius:6px; max-width:400px;">
-                        <div class="input-wrapper">
-                            <label>% Solicitado</label>
-                            <input type="number" step="0.01" name="sol_faixa" value="{{ filtros.sol_faixa }}">
+                    <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
+                    {% for label, key in tipos_despesa %}
+                    <div class="expense-row">
+                        <div class="expense-label">
+                            {{ label }} 
+                            {% if bases_dict and bases_dict.get('Faixa de Eventos', {}).get(label, 0) > 0 %}
+                                <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Faixa de Eventos'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                            {% else %}
+                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                            {% endif %}
                         </div>
-                        <div class="input-wrapper">
-                            <label>% Concedido</label>
-                            <input type="number" step="0.01" name="conc_faixa" value="{{ filtros.conc_faixa }}">
+                        <div class="expense-inputs">
+                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_fai_{{ key }}" value="{{ filtros['sol_fai_'~key] }}"></div>
+                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_fai_{{ key }}" value="{{ filtros['conc_fai_'~key] }}"></div>
                         </div>
                     </div>
+                    {% endfor %}
                 </div>
 
                 <!-- ABA 3: ITENS ESPECÍFICOS -->
                 <div id="tab-especificos" class="tab-content">
-                    <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Atenção: Ao preencher qualquer taxa abaixo (diferente de 0), o item é RETIRADO da regra geral (Dotação/Faixa) e calculado separadamente.</p>
-                    
-                    {% set esp = [
-                        ('DIETAS', 'dietas'), ('PERFUROCORTANTES', 'perfuro'), ('ANESTESISTA', 'anest'),
-                        ('MATERIAIS', 'mat'), ('MEDICAMENTOS', 'med'), ('DIÁRIAS', 'dia'),
-                        ('TAXAS', 'taxa'), ('GASES MEDICINAIS', 'gas'), ('OPME', 'opme'),
-                        ('SADT / EXAMES', 'sadt'), ('HONORÁRIOS', 'hon'), ('OUTROS / GERAL', 'outros')
-                    ] %}
-                    
-                    {% for label, key in esp %}
-                    <div class="expense-row">
-                        <div class="expense-label">{{ label }}</div>
+                    <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral. Eles saem das abas acima e são calculados aqui:</p>
+                    <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
+                        <div class="expense-label" style="color:#856404;">
+                            TODOS OS CÓDIGOS ESPECÍFICOS
+                            {% if bases_dict and bases_dict.get('Item Específico', {}).get('TOTAL', 0) > 0 %}
+                                <span class="expense-value" style="color:#856404;">— R$ {{ "{:,.2f}".format(bases_dict['Item Específico']['TOTAL']).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                            {% else %}
+                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                            {% endif %}
+                        </div>
                         <div class="expense-inputs">
-                            <div class="input-wrapper">
-                                <label>% Sol.</label>
-                                <input type="number" step="0.01" name="sol_{{ key }}" value="{{ filtros['sol_'~key] }}">
-                            </div>
-                            <div class="input-wrapper">
-                                <label>% Conc.</label>
-                                <input type="number" step="0.01" name="conc_{{ key }}" value="{{ filtros['conc_'~key] }}">
-                            </div>
+                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_exc" value="{{ filtros['sol_exc'] }}"></div>
+                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_exc" value="{{ filtros['conc_exc'] }}"></div>
                         </div>
                     </div>
-                    {% endfor %}
                 </div>
             </div>
             
@@ -539,28 +565,27 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
                     {% if tem_dados %}
                     <div>
-                        {% set export_params = 'comp='~filtros.comp~'&tipo_neg='~filtros.tipo_neg~'&uf_alvo='~filtros.uf_alvo~'&cnpj_alvo='~filtros.cnpj_alvo~'&busca_por='~filtros.busca_por~'&modo_aplicacao='~filtros.modo_aplicacao~'&ipca='~filtros.ipca~'&analista='~filtros.analista~'&gestor='~filtros.gestor~'&sol_dotacao='~filtros.sol_dotacao~'&conc_dotacao='~filtros.conc_dotacao~'&sol_faixa='~filtros.sol_faixa~'&conc_faixa='~filtros.conc_faixa~'&sol_linear='~filtros.sol_linear~'&conc_linear='~filtros.conc_linear~'&sol_dietas='~filtros.sol_dietas~'&conc_dietas='~filtros.conc_dietas~'&sol_perfuro='~filtros.sol_perfuro~'&conc_perfuro='~filtros.conc_perfuro~'&sol_anest='~filtros.sol_anest~'&conc_anest='~filtros.conc_anest~'&sol_mat='~filtros.sol_mat~'&conc_mat='~filtros.conc_mat~'&sol_med='~filtros.sol_med~'&conc_med='~filtros.conc_med~'&sol_dia='~filtros.sol_dia~'&conc_dia='~filtros.conc_dia~'&sol_taxa='~filtros.sol_taxa~'&conc_taxa='~filtros.conc_taxa~'&sol_gas='~filtros.sol_gas~'&conc_gas='~filtros.conc_gas~'&sol_opme='~filtros.sol_opme~'&conc_opme='~filtros.conc_opme~'&sol_sadt='~filtros.sol_sadt~'&conc_sadt='~filtros.conc_sadt~'&sol_hon='~filtros.sol_hon~'&conc_hon='~filtros.conc_hon~'&sol_outros='~filtros.sol_outros~'&conc_outros='~filtros.conc_outros %}
-                        <a href="/exportar?{{ export_params }}" class="btn btn-success">📥 Excel</a>
-                        <a href="/exportar_pdf?{{ export_params }}" class="btn btn-pdf" target="_blank">📄 PDF</a>
+                        <a href="/exportar?{{ query_string }}" class="btn btn-success">📥 Excel</a>
+                        <a href="/exportar_pdf?{{ query_string }}" class="btn btn-pdf" target="_blank">📄 PDF</a>
                     </div>
                     {% endif %}
                 </div>
                 
                 <div class="grid-4" style="margin-top: 15px;">
                     <div class="metric-box">
-                        <h4>Faturamento Lido</h4>
+                        <h4>Faturamento Lido (Base)</h4>
                         <div class="valor">R$ {{ totais.faturamento_total }}</div>
                         <div class="sub">{{ totais.linhas_faturamento }} linhas</div>
                     </div>
                     <div class="metric-box">
                         <h4>Total Solicitado</h4>
                         <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_solicitado }}</div>
-                        <div class="sub">Pós-regras (Sol.)</div>
+                        <div class="sub">Com taxas de origem (Sol.)</div>
                     </div>
                     <div class="metric-box">
                         <h4>Total Concedido</h4>
                         <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
-                        <div class="sub">Pós-regras (Conc.)</div>
+                        <div class="sub">Com regras aplicadas (Conc.)</div>
                     </div>
                     <div class="metric-box impacto-card">
                         <h4>Custo Evitado</h4>
@@ -603,7 +628,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="6" style="text-align: center; color: #888; padding: 30px;">Aguardando processamento.</td>
+                            <td colspan="6" style="text-align: center; color: #888; padding: 30px;">Aguardando processamento. Selecione a competência e execute.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -647,7 +672,6 @@ HTML_ADMIN = CSS_PADRAO + """
                 <div class="form-group">
                     <label>Competência Fixa (Opcional):</label>
                     <input type="text" name="competencia" style="width: 100%; padding: 10px;" placeholder="Deixe VAZIO para usar o nome do arquivo">
-                    <small style="color: #666;">Se não preencher, o sistema usará o nome do arquivo</small>
                 </div>
 
                 <div class="form-group">
@@ -682,24 +706,20 @@ HTML_ADMIN = CSS_PADRAO + """
                                 <td><strong>{{ info.linhas }}</strong></td>
                                 <td>
                                     {% if info.linhas > 0 %}
-                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Deseja apagar TODO o faturamento de todos os meses? Isso limpará arquivos antigos também.');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar Tudo</button></form>
+                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar TODO o faturamento?');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar Tudo</button></form>
                                     {% endif %}
                                 </td>
                             </tr>
-                            
                             {% for c in comps_fat %}
                             <tr style="background: #ffffff; font-size: 0.9em;">
                                 <td style="padding-left: 25px; color: var(--azul-claro);">└─ Mês Salvo: <strong>{{ c.comp }}</strong></td>
                                 <td style="color: #666; font-style: italic;">Ativa</td>
                                 <td>{{ c.linhas }}</td>
                                 <td>
-                                    <form action="/admin/limpar_competencia/{{ c.comp }}" method="post" onsubmit="return confirm('Tem certeza que deseja apagar apenas o mês {{ c.comp }}?');" style="margin:0;">
-                                        <button type="submit" class="btn-danger" style="background:#e67e22; padding: 3px 8px; font-size: 0.85em;">Excluir Mês</button>
-                                    </form>
+                                    <form action="/admin/limpar_competencia/{{ c.comp }}" method="post" onsubmit="return confirm('Apagar {{ c.comp }}?');" style="margin:0;"><button type="submit" class="btn-danger" style="background:#e67e22; padding: 3px 8px;">Excluir</button></form>
                                 </td>
                             </tr>
                             {% endfor %}
-                            
                         {% else %}
                             <tr>
                                 <td><strong>{{ info.desc }}</strong></td>
@@ -725,28 +745,23 @@ HTML_ADMIN = CSS_PADRAO + """
         e.preventDefault();
         const formData = new FormData(form);
         const xhr = new XMLHttpRequest();
-        
         document.getElementById('progress-wrapper').style.display = 'block';
         document.getElementById('progress-text').style.display = 'block';
-        const btn = document.getElementById('upload-btn');
-        btn.disabled = true;
-        btn.innerText = 'Transmissão em andamento...';
-        btn.style.backgroundColor = '#999';
-
+        document.getElementById('upload-btn').disabled = true;
         xhr.upload.addEventListener('progress', function(e) {
             if (e.lengthComputable) {
                 const percent = Math.round((e.loaded / e.total) * 100);
                 document.getElementById('progress-bar').style.width = percent + '%';
                 if (percent < 100) { document.getElementById('progress-text').innerText = 'Enviando arquivos: ' + percent + '%'; } 
                 else {
-                    document.getElementById('progress-text').innerText = 'Upload 100%! O BD está processando em lotes de 200.000 (Aguarde)...';
+                    document.getElementById('progress-text').innerText = 'Upload 100%! O BD está processando em lotes de 200.000...';
                     document.getElementById('progress-bar').style.backgroundColor = 'var(--amarelo-postal)';
                 }
             }
         });
         xhr.onload = function() {
             if (xhr.status === 200) { document.open(); document.write(xhr.responseText); document.close(); } 
-            else { alert('Erro na resposta do servidor.'); window.location.reload(); }
+            else { alert('Erro no servidor.'); window.location.reload(); }
         };
         xhr.open('POST', '/admin_upload', true);
         xhr.send(formData);
@@ -755,22 +770,19 @@ HTML_ADMIN = CSS_PADRAO + """
 """
 
 # =====================================================================
-# AUXILIARES DE CÁLCULO FINANCEIRO E EXTRATOR DE ITENS
+# AUXILIARES DE CÁLCULO FINANCEIRO
 # =====================================================================
 def aplicar_reajustes_simulados(df_cruzado, f):
-    if df_cruzado.empty:
-        return df_cruzado
+    if df_cruzado.empty: return df_cruzado
         
     df = df_cruzado.copy()
     v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR'])
     if not v_col: return df
 
-    # Filtros de Região / Negociação
     if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
         df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
     elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-        if f['busca_por'] == 'CNPJ':
-            df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+        if f['busca_por'] == 'CNPJ': df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
         else:
             mask_nome = df['NOME_FANTASIA_PRESTADOR'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False, case=False)
             mask_cnpj = df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)
@@ -786,42 +798,38 @@ def aplicar_reajustes_simulados(df_cruzado, f):
 
     df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     
-    # Criamos a coluna final que vai separar as coisas pro PDF/Tabela
+    # 1. Identifica Itens Específicos e "Arranca" eles da Faixa/Dotação
+    codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
     df['ORIGEM_CALCULO'] = df['ORIGEM_INICIAL']
+    mask_exc = df['_COD_LIMPO_'].isin(codigos_excecao) & (len(codigos_excecao) > 0)
+    df.loc[mask_exc, 'ORIGEM_CALCULO'] = 'Item Específico'
+
     df['TAXA_SOLICITADA'] = 0.0
     df['TAXA_CONCEDIDA'] = 0.0
 
     if f['modo_aplicacao'] == 'LINEAR':
-        df['TAXA_SOLICITADA'] = f['sol_linear']
-        df['TAXA_CONCEDIDA'] = f['conc_linear']
-        df['ORIGEM_CALCULO'] = 'Modo Linear'
+        if f['sol_linear'] != 0.0 or f['conc_linear'] != 0.0:
+            df['TAXA_SOLICITADA'] = f['sol_linear']
+            df['TAXA_CONCEDIDA'] = f['conc_linear']
+            df['ORIGEM_CALCULO'] = 'Modo Linear'
     else:
-        # 1. Aplica regra geral base
-        df['TAXA_SOLICITADA'] = np.where(df['ORIGEM_INICIAL'] == 'Dotação', f['sol_dotacao'], f['sol_faixa'])
-        df['TAXA_CONCEDIDA'] = np.where(df['ORIGEM_INICIAL'] == 'Dotação', f['conc_dotacao'], f['conc_faixa'])
+        # Percorre a matriz de Dotação e Faixa para cada tipo de despesa
+        for label, key in TIPOS_DESPESA:
+            mask_tipo = df['TIPO_DESPESA_FINAL'] == label
+            
+            mask_dot = mask_tipo & (df['ORIGEM_CALCULO'] == 'Dotação')
+            df.loc[mask_dot, 'TAXA_SOLICITADA'] = f.get(f'sol_dot_{key}', 0.0)
+            df.loc[mask_dot, 'TAXA_CONCEDIDA'] = f.get(f'conc_dot_{key}', 0.0)
+            
+            mask_fai = mask_tipo & (df['ORIGEM_CALCULO'] == 'Faixa de Eventos')
+            df.loc[mask_fai, 'TAXA_SOLICITADA'] = f.get(f'sol_fai_{key}', 0.0)
+            df.loc[mask_fai, 'TAXA_CONCEDIDA'] = f.get(f'conc_fai_{key}', 0.0)
 
-        # 2. O Extrator (Itens Específicos tiram os itens da regra geral se foram preenchidos)
-        especificos = {
-            'DIETAS': ('sol_dietas', 'conc_dietas'), 'PERFUROCORTANTES': ('sol_perfuro', 'conc_perfuro'),
-            'ANESTESISTA': ('sol_anest', 'conc_anest'), 'MATERIAIS': ('sol_mat', 'conc_mat'),
-            'MEDICAMENTOS': ('sol_med', 'conc_med'), 'DIARIAS': ('sol_dia', 'conc_dia'),
-            'TAXAS': ('sol_taxa', 'conc_taxa'), 'GASES': ('sol_gas', 'conc_gas'),
-            'OPME': ('sol_opme', 'conc_opme'), 'SADT': ('sol_sadt', 'conc_sadt'),
-            'HONORARIOS': ('sol_hon', 'conc_hon'), 'OUTROS': ('sol_outros', 'conc_outros')
-        }
+        # Aplica a regra para a gaveta "Item Específico"
+        if mask_exc.any():
+            df.loc[mask_exc, 'TAXA_SOLICITADA'] = f['sol_exc']
+            df.loc[mask_exc, 'TAXA_CONCEDIDA'] = f['conc_exc']
 
-        for grupo, (k_sol, k_conc) in especificos.items():
-            val_sol = f[k_sol]
-            val_conc = f[k_conc]
-            # Se o usuário digitou qualquer coisa diferente de 0.0, a gente arranca o item da regra geral
-            if val_sol != 0.0 or val_conc != 0.0:
-                mask = df['TIPO_DESPESA_FINAL'] == grupo
-                if mask.any():
-                    df.loc[mask, 'TAXA_SOLICITADA'] = val_sol
-                    df.loc[mask, 'TAXA_CONCEDIDA'] = val_conc
-                    df.loc[mask, 'ORIGEM_CALCULO'] = 'Item Específico'
-
-    # Cálculos Matemáticos Finais
     df['VALOR_SOLICITADO'] = df['VALOR_BASE'] * (1 + (df['TAXA_SOLICITADA'] / 100))
     df['VALOR_CONCEDIDO'] = df['VALOR_BASE'] * (1 + (df['TAXA_CONCEDIDA'] / 100))
     df['CUSTO_EVITADO'] = df['VALOR_SOLICITADO'] - df['VALOR_CONCEDIDO']
@@ -829,24 +837,28 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     return df
 
 def processa_filtros_request(req):
-    keys_float = [
-        'sol_dotacao', 'conc_dotacao', 'sol_faixa', 'conc_faixa', 'sol_linear', 'conc_linear',
-        'sol_dietas', 'conc_dietas', 'sol_perfuro', 'conc_perfuro', 'sol_anest', 'conc_anest',
-        'sol_mat', 'conc_mat', 'sol_med', 'conc_med', 'sol_dia', 'conc_dia', 'sol_taxa', 'conc_taxa',
-        'sol_gas', 'conc_gas', 'sol_opme', 'conc_opme', 'sol_sadt', 'conc_sadt', 'sol_hon', 'conc_hon',
-        'sol_outros', 'conc_outros', 'ipca'
-    ]
-    f = {k: float(req.args.get(k, '0.00') or 0.0) for k in keys_float}
-    f.update({
-        'comp': req.args.get('comp', '').strip(),
+    f = {
         'modo_aplicacao': req.args.get('modo_aplicacao', 'POR_TIPO'),
+        'ipca': float(req.args.get('ipca', '0.00') or 0.0),
         'analista': req.args.get('analista', '').strip(),
         'gestor': req.args.get('gestor', '').strip(),
         'tipo_neg': req.args.get('tipo_neg', 'TODOS').strip(),
         'uf_alvo': req.args.get('uf_alvo', '').strip(),
         'cnpj_alvo': req.args.get('cnpj_alvo', '').strip(),
-        'busca_por': req.args.get('busca_por', 'CNPJ').strip()
-    })
+        'busca_por': req.args.get('busca_por', 'CNPJ').strip(),
+        'itens_exc': req.args.get('itens_exc', '').strip(),
+        'sol_linear': float(req.args.get('sol_linear', '0.00') or 0.0),
+        'conc_linear': float(req.args.get('conc_linear', '0.00') or 0.0),
+        'sol_exc': float(req.args.get('sol_exc', '0.00') or 0.0),
+        'conc_exc': float(request.args.get('conc_exc', '0.00') or 0.0)
+    }
+    f['comp_list'] = req.args.getlist('comp')
+    
+    for _, key in TIPOS_DESPESA:
+        f[f'sol_dot_{key}'] = float(req.args.get(f'sol_dot_{key}', '0.00') or 0.0)
+        f[f'conc_dot_{key}'] = float(req.args.get(f'conc_dot_{key}', '0.00') or 0.0)
+        f[f'sol_fai_{key}'] = float(req.args.get(f'sol_fai_{key}', '0.00') or 0.0)
+        f[f'conc_fai_{key}'] = float(req.args.get(f'conc_fai_{key}', '0.00') or 0.0)
     return f
 
 # =====================================================================
@@ -863,10 +875,21 @@ def dashboard():
     totais = {'faturamento_total': '0,00', 'total_solicitado': '0,00', 'linhas_faturamento': 0, 'total_concedido': '0,00', 'custo_evitado': '0,00'}
     itens_detalhe = []
     tem_dados = False
-    
-    if f['comp'] and engine:
+    comps_disponiveis = []
+    bases_dict = {'Dotação': {}, 'Faixa de Eventos': {}, 'Item Específico': {}}
+
+    if engine:
         try:
-            df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
+            with engine.connect() as conn:
+                res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
+                comps_disponiveis = [r[0] for r in res]
+        except: pass
+    
+    if f['comp_list'] and engine:
+        try:
+            format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
+            df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
+            
             if not df_fat.empty:
                 try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
                 except: df_mat = pd.DataFrame()
@@ -897,7 +920,15 @@ def dashboard():
                         'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                     }
 
-                    # AGRUPAMENTO FINAL (Usa a ORIGEM_CALCULO para separar os itens extraídos)
+                    # Para renderizar os valores do lado dos nomes nas abas
+                    base_grp = df_final.groupby(['ORIGEM_CALCULO', 'TIPO_DESPESA_FINAL'])['VALOR_BASE'].sum().to_dict()
+                    for (origem, tipo), valor in base_grp.items():
+                        if origem not in bases_dict: bases_dict[origem] = {}
+                        bases_dict[origem][tipo] = valor
+                    
+                    if 'Item Específico' in df_final['ORIGEM_CALCULO'].values:
+                        bases_dict['Item Específico']['TOTAL'] = df_final[df_final['ORIGEM_CALCULO'] == 'Item Específico']['VALOR_BASE'].sum()
+
                     grupo = df_final.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM_CALCULO']).agg(
                         qtd=('VALOR_BASE', 'count'), v_base=('VALOR_BASE', 'sum'),
                         v_sol=('VALOR_SOLICITADO', 'sum'), v_con=('VALOR_CONCEDIDO', 'sum')
@@ -905,9 +936,7 @@ def dashboard():
 
                     for _, r in grupo.iterrows():
                         itens_detalhe.append({
-                            'tipo_despesa': r['TIPO_DESPESA_FINAL'],
-                            'origem': r['ORIGEM_CALCULO'],
-                            'qtd': r['qtd'],
+                            'tipo_despesa': r['TIPO_DESPESA_FINAL'], 'origem': r['ORIGEM_CALCULO'], 'qtd': r['qtd'],
                             'valor_base': f"{r['v_base']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
                             'valor_sol': f"{r['v_sol']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."),
                             'valor_con': f"{r['v_con']:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
@@ -915,15 +944,16 @@ def dashboard():
         except Exception as e:
             flash(f"Erro ao processar SQL: {str(e)}", "error")
 
-    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=f['comp'] or "Nenhuma", filtros=f, tem_dados=tem_dados)
+    q_str = request.query_string.decode('utf-8')
+    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=", ".join(f['comp_list']) or "Nenhuma", filtros=f, tem_dados=tem_dados, comps_disponiveis=comps_disponiveis, tipos_despesa=TIPOS_DESPESA, bases_dict=bases_dict, query_string=q_str)
 
 @app.route('/exportar')
 def exportar():
     f = processa_filtros_request(request)
-    if not f['comp'] or not engine: return redirect(url_for('dashboard'))
-    
+    if not f['comp_list'] or not engine: return redirect(url_for('dashboard'))
     try:
-        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
+        format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
+        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
         if df_fat.empty: return redirect(url_for('dashboard'))
         try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
         except: df_mat = pd.DataFrame()
@@ -943,16 +973,16 @@ def exportar():
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_final.to_excel(writer, index=False, sheet_name="Reajuste")
         output.seek(0)
-        return send_file(output, download_name=f"Reajuste_{f['comp']}.xlsx", as_attachment=True)
+        return send_file(output, download_name=f"Reajuste_Export.xlsx", as_attachment=True)
     except Exception: return redirect(url_for('dashboard'))
 
 @app.route('/exportar_pdf')
 def exportar_pdf():
     f = processa_filtros_request(request)
-    if not f['comp'] or not engine: return redirect(url_for('dashboard'))
-    
+    if not f['comp_list'] or not engine: return redirect(url_for('dashboard'))
     try:
-        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
+        format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
+        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
         if df_fat.empty: return redirect(url_for('dashboard'))
         try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
         except: df_mat = pd.DataFrame()
@@ -980,7 +1010,7 @@ def exportar_pdf():
             })
 
         data_pdf = {
-            'comp': f['comp'], 'uf_alvo': f['uf_alvo'], 'cnpj_alvo': f['cnpj_alvo'],
+            'comp_list': f['comp_list'], 'uf_alvo': f['uf_alvo'], 'cnpj_alvo': f['cnpj_alvo'],
             'busca_por': f['busca_por'], 'modo_aplicacao': f['modo_aplicacao'],
             'ipca': f['ipca'], 'tipo_neg': f['tipo_neg'], 'analista': f['analista'], 'gestor': f['gestor'],
             'by_type': by_type,
@@ -993,7 +1023,7 @@ def exportar_pdf():
         pdf_bytes = build_analysis_pdf_bytes(data_pdf)
         response = make_response(pdf_bytes)
         response.headers.set('Content-Type', 'application/pdf')
-        response.headers.set('Content-Disposition', f'attachment; filename="Relatorio_Impacto_{f["comp"]}.pdf"')
+        response.headers.set('Content-Disposition', f'attachment; filename="Relatorio_Impacto.pdf"')
         return response
     except Exception as e:
         flash(f"Erro ao gerar PDF: {str(e)}", "error")
