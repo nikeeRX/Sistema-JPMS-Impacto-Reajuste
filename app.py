@@ -47,36 +47,73 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
+# --- O FAREJADOR BLINDADO EM LOTES (Para não estourar a memória RAM) ---
+def ler_e_filtrar_faturamento(engine, comp_list, f):
+    format_strings = ','.join([f"'{c}'" for c in comp_list])
+    sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
+    
+    df_list = []
+    # Lê o banco em pacotes de 100.000 linhas para não travar
+    for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
+        # 1. Cria colunas unificadas para pesquisa
+        chunk["CNPJ_FILTRO"] = ""
+        for cand in ["CNPJ", "PRESTADOR", "CNPJ_EXECUTOR", "CGCCPF", "CPFCNPJ"]:
+            c = _find_column(chunk, [cand])
+            if c:
+                temp = chunk[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = chunk["CNPJ_FILTRO"] == ""
+                chunk.loc[mask, "CNPJ_FILTRO"] = temp[mask]
+
+        chunk["NOME_FILTRO"] = ""
+        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "PRESTADOR"]:
+            c = _find_column(chunk, [cand])
+            if c:
+                temp = chunk[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = chunk["NOME_FILTRO"] == ""
+                chunk.loc[mask, "NOME_FILTRO"] = temp[mask]
+
+        chunk["UF_FILTRO"] = ""
+        for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
+            c = _find_column(chunk, [cand])
+            if c:
+                temp = chunk[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
+                mask = chunk["UF_FILTRO"] == ""
+                chunk.loc[mask, "UF_FILTRO"] = temp[mask]
+
+        # 2. Aplica o filtro de abrangência diretamente no pacote
+        if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
+            chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
+        elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
+            alvo = str(f['cnpj_alvo']).strip()
+            if f['busca_por'] == 'CNPJ': 
+                chunk = chunk[chunk['CNPJ_FILTRO'].str.contains(alvo, na=False)]
+            else:
+                mask_nome = chunk['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
+                mask_cnpj = chunk['CNPJ_FILTRO'].str.contains(alvo, na=False)
+                chunk = chunk[mask_nome | mask_cnpj]
+        elif f['tipo_neg'] == 'MISTO':
+            if f['uf_alvo']: 
+                chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
+            if f['cnpj_alvo']:
+                alvo = str(f['cnpj_alvo']).strip()
+                if f['busca_por'] == 'CNPJ': 
+                    chunk = chunk[chunk['CNPJ_FILTRO'].str.contains(alvo, na=False)]
+                else:
+                    mask_nome = chunk['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
+                    mask_cnpj = chunk['CNPJ_FILTRO'].str.contains(alvo, na=False)
+                    chunk = chunk[mask_nome | mask_cnpj]
+        
+        if not chunk.empty:
+            df_list.append(chunk)
+            
+    if df_list:
+        return pd.concat(df_list, ignore_index=True)
+    return pd.DataFrame()
+
 def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
     try:
         df = df_fat.copy()
         
-        # --- O FAREJADOR BLINDADO DE COLUNAS (RESOLVE O BUG DO FILTRO VAZIO) ---
-        df["CNPJ_FILTRO"] = ""
-        for cand in ["CNPJ", "PRESTADOR", "CNPJ_EXECUTOR", "CGCCPF", "CPFCNPJ"]:
-            c = _find_column(df, [cand])
-            if c:
-                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
-                mask = df["CNPJ_FILTRO"] == ""
-                df.loc[mask, "CNPJ_FILTRO"] = temp[mask]
-
-        df["NOME_FILTRO"] = ""
-        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "PRESTADOR"]:
-            c = _find_column(df, [cand])
-            if c:
-                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
-                mask = df["NOME_FILTRO"] == ""
-                df.loc[mask, "NOME_FILTRO"] = temp[mask]
-
-        df["UF_FILTRO"] = ""
-        for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
-            c = _find_column(df, [cand])
-            if c:
-                temp = df[c].fillna("").astype(str).str.strip().replace(['nan', 'None', 'NaN', 'NoneType'], '')
-                mask = df["UF_FILTRO"] == ""
-                df.loc[mask, "UF_FILTRO"] = temp[mask]
-        # -----------------------------------------------------------------------
-
         ev_col = _find_column(df, [COL_EVENTO, "EVENTO", "COD_EVENTO", "ESTRUTURA", "CODIGO"])
         ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
         grau_col = _find_column(df, ["DESCRICAO_GRAU", "GRAU"])
@@ -339,8 +376,8 @@ CSS_PADRAO = """
     
     .btn { background-color: var(--azul-claro); color: white; font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; transition: background 0.3s; }
     .btn:hover { background-color: var(--azul-postal); }
-    .btn-action { background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px; }
-    .btn-action:hover { background-color: #e0a100; }
+    .btn-action { background-color: var(--verde-ok); color: white; width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px; }
+    .btn-action:hover { background-color: #005f27; }
     .btn-success { background-color: var(--verde-ok); }
     .btn-pdf { background-color: #cc0000; margin-left: 10px; }
     .btn-danger { background-color: var(--vermelho-alerta); padding: 5px 10px; font-size: 0.85em; }
@@ -383,10 +420,10 @@ CSS_PADRAO = """
         var divLinear = document.getElementById('div_linear');
         if (modo === 'LINEAR') {
             divTipo.style.display = 'none';
-            divLinear.style.display = 'block';
+            if (divLinear) divLinear.style.display = 'block';
         } else {
             divTipo.style.display = 'block';
-            divLinear.style.display = 'none';
+            if (divLinear) divLinear.style.display = 'none';
         }
     }
 
@@ -398,6 +435,7 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
+<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
@@ -447,18 +485,20 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </div>
         
         <div style="flex-grow: 1;"></div>
-        <button type="submit" class="btn btn-action">Carregar e Cruzar Bases</button>
+        <button type="submit" name="step" value="1" class="btn" style="background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px;">Carregar e Cruzar Bases</button>
     </div>
 
+    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
     <div class="main-content">
         <div class="header">
             <h2>Sistema de reajuste de discussão</h2>
-            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Painel Admin BD</a>
+            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Administração de Banco de Dados</a>
         </div>
 
         <div class="container">
             {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
 
+            <!-- FILTRO DE NEGOCIAÇÃO -->
             <div class="card" style="border-top: none;">
                 <div class="form-group" style="max-width: 400px;">
                     <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
@@ -492,6 +532,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
+            {% if step == '1' or step == '2' %}
+            <!-- BLOCO DE TAXAS (COM ABAS) -->
             <div class="card" id="div_por_tipo">
                 <div class="tabs">
                     <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação</button>
@@ -499,6 +541,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                 </div>
 
+                <!-- ABA 1: DOTAÇÃO -->
                 <div id="tab-dotacao" class="tab-content active">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -519,6 +562,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
+                <!-- ABA 2: FAIXA DE EVENTO -->
                 <div id="tab-faixa" class="tab-content">
                     <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
                     {% for label, key in tipos_despesa %}
@@ -539,11 +583,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     {% endfor %}
                 </div>
 
+                <!-- ABA 3: ITENS ESPECÍFICOS -->
                 <div id="tab-especificos" class="tab-content">
                     <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral. Eles saem das abas acima e são calculados aqui:</p>
                     <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
                         <div class="expense-label" style="color:#856404;">
-                            TODOS OS CÓDIGOS ESPECÍFICOS
+                            TODOS OS CÓDIGOS ESPECÍFICOS EXTRAÍDOS
                             {% if bases_dict and bases_dict.get('Item Específico', {}).get('TOTAL', 0) > 0 %}
                                 <span class="expense-value" style="color:#856404;">— R$ {{ "{:,.2f}".format(bases_dict['Item Específico']['TOTAL']).replace(',','X').replace('.',',').replace('X','.') }}</span>
                             {% else %}
@@ -558,6 +603,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
             
+            <!-- BLOCO DINÂMICO: LINEAR -->
             <div id="div_linear" style="display:none; background:#fde8e8; padding:20px; border-radius:8px; border:1px solid var(--vermelho-alerta); margin-bottom:20px;">
                 <h3 style="margin: 0 0 5px 0; color: var(--vermelho-alerta);">Modo Linear Ativado</h3>
                 <p style="font-size:0.9em; color:#666; margin-bottom:15px;">A mesma taxa será aplicada a todas as linhas do faturamento, esmagando regras de Dotação, Faixa e Exceções.</p>
@@ -572,7 +618,14 @@ HTML_DASHBOARD = CSS_PADRAO + """
                     </div>
                 </div>
             </div>
+            
+            <div style="text-align: right; margin-bottom: 20px;">
+                <button type="submit" name="step" value="2" class="btn btn-action" style="width: auto; padding: 12px 30px;">Calcular Análise Final</button>
+            </div>
+            {% endif %}
 
+            {% if step == '2' %}
+            <!-- RESULTADOS -->
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
@@ -639,24 +692,50 @@ HTML_DASHBOARD = CSS_PADRAO + """
                             <td>R$ {{ item.valor_sol }}</td>
                             <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.valor_con }}</td>
                         </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="6" style="text-align: center; color: #888; padding: 30px;">Aguardando processamento. Selecione a competência e execute.</td>
-                        </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
+            {% endif %}
         </div>
     </div>
 </form>
 """
 
-HTML_ADMIN = CSS_PADRAO + """
+HTML_ADMIN = """
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>Administração - GERED</title>
+    <style>
+        :root { --azul-postal: #002c52; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #eef2f5; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; }
+        .header { background-color: white; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid var(--amarelo-postal); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .logo-img { height: 60px; object-fit: contain; }
+        .container { padding: 30px 40px; max-width: 1200px; margin: 0 auto; }
+        .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .form-group { margin-bottom: 15px; }
+        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); font-size: 0.9em; }
+        .form-control { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; }
+        th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; border-bottom: 3px solid var(--amarelo-postal); }
+        td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+        tr:hover { background-color: #f4f7f6; }
+        .btn { background-color: var(--azul-postal); color: white; font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; }
+        .btn:hover { background-color: #001a33; }
+        .btn-success { background-color: var(--verde-ok); color: white; }
+        .btn-danger { background-color: var(--vermelho-alerta); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
+        .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
+        .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
+        .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
+    </style>
+</head>
+<body>
 <div class="header">
     <div style="display: flex; align-items: center; gap: 20px;">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
-        <h2 style="margin:0;">Administração de Banco de Dados</h2>
+        <h2 style="margin:0; color: var(--azul-postal);">Administração de Banco de Dados</h2>
     </div>
     <a href="/" class="btn">Voltar ao Dashboard</a>
 </div>
@@ -665,14 +744,14 @@ HTML_ADMIN = CSS_PADRAO + """
     {% with messages = get_flashed_messages(category_filter=["success"]) %}{% if messages %}{% for message in messages %}<div class="alert alert-success">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
     {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for message in messages %}<div class="alert alert-danger">{{ message }}</div>{% endfor %}{% endif %}{% endwith %}
 
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
-        <div class="card" style="border-top: 4px solid var(--azul-claro);">
+    <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 20px;">
+        <div class="card" style="border-top: 4px solid var(--azul-postal);">
             <h3 style="margin-top:0; color: var(--azul-postal);">Upload Inteligente em Massa</h3>
             
             <form id="upload-form" action="/admin_upload" method="post" enctype="multipart/form-data">
                 <div class="form-group">
                     <label>Selecione a Base de Destino:</label>
-                    <select name="tipo_base" style="width: 100%; padding: 10px;" required>
+                    <select name="tipo_base" class="form-control" required>
                         <option value="faturamento">Faturamento Mensal</option>
                         <option value="dotacoes">Base de Dotações</option>
                         <option value="materiais">Materiais Perfurocortantes</option>
@@ -684,20 +763,20 @@ HTML_ADMIN = CSS_PADRAO + """
                 
                 <div class="form-group">
                     <label>Competência Fixa (Opcional):</label>
-                    <input type="text" name="competencia" style="width: 100%; padding: 10px;" placeholder="Deixe VAZIO para usar o nome do arquivo">
+                    <input type="text" name="competencia" class="form-control" placeholder="Deixe VAZIO para usar o nome do arquivo">
                 </div>
 
                 <div class="form-group">
-                    <label>Selecione a PASTA INTEIRA com os arquivos (Upload total):</label>
-                    <input type="file" name="arquivos_pasta" style="width: 100%; padding: 15px; background: #fafafa; border: 2px dashed #005a92;" webkitdirectory directory multiple>
+                    <label>Selecione a PASTA INTEIRA com os arquivos:</label>
+                    <input type="file" name="arquivos_pasta" class="form-control" style="background: #fafafa; border: 2px dashed #005a92;" webkitdirectory directory multiple>
                 </div>
                 
                 <div class="form-group">
-                    <label>OU Selecione arquivos soltos manualmente (Segure CTRL):</label>
-                    <input type="file" name="arquivos_soltos" style="width: 100%; padding: 15px; background: #fafafa; border: 2px dashed #999;" multiple>
+                    <label>OU Selecione arquivos soltos manualmente:</label>
+                    <input type="file" name="arquivos_soltos" class="form-control" style="background: #fafafa; border: 2px dashed #999;" multiple>
                 </div>
                 
-                <button type="submit" id="upload-btn" class="btn btn-success" style="width: 100%; font-size: 16px; padding: 12px;">Injetar Dados no Servidor</button>
+                <button type="submit" id="upload-btn" class="btn btn-success" style="width: 100%; font-size: 1.1em; padding: 12px;">Injetar Dados no Servidor</button>
                 
                 <div id="progress-wrapper" style="background: #eef2f5; border-radius: 4px; overflow: hidden; height: 25px; margin-top: 20px; border: 1px solid #ccc; display: none;">
                     <div id="progress-bar" style="background: var(--verde-ok); height: 100%; width: 0%; transition: width 0.3s ease;"></div>
@@ -719,17 +798,17 @@ HTML_ADMIN = CSS_PADRAO + """
                                 <td><strong>{{ info.linhas }}</strong></td>
                                 <td>
                                     {% if info.linhas > 0 %}
-                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar TODO o faturamento?');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar Tudo</button></form>
+                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar TODO o faturamento?');" style="margin:0;"><button type="submit" class="btn-danger">Limpar Tudo</button></form>
                                     {% endif %}
                                 </td>
                             </tr>
                             {% for c in comps_fat %}
                             <tr style="background: #ffffff; font-size: 0.9em;">
-                                <td style="padding-left: 25px; color: var(--azul-claro);">└─ Mês Salvo: <strong>{{ c.comp }}</strong></td>
+                                <td style="padding-left: 25px; color: #005a92;">└─ Mês Salvo: <strong>{{ c.comp }}</strong></td>
                                 <td style="color: #666; font-style: italic;">Ativa</td>
                                 <td>{{ c.linhas }}</td>
                                 <td>
-                                    <form action="/admin/limpar_competencia/{{ c.comp }}" method="post" onsubmit="return confirm('Apagar {{ c.comp }}?');" style="margin:0;"><button type="submit" class="btn-danger" style="background:#e67e22; padding: 3px 8px;">Excluir</button></form>
+                                    <form action="/admin/limpar_competencia/{{ c.comp }}" method="post" onsubmit="return confirm('Apagar {{ c.comp }}?');" style="margin:0;"><button type="submit" class="btn-danger" style="background:#e67e22;">Excluir</button></form>
                                 </td>
                             </tr>
                             {% endfor %}
@@ -740,7 +819,7 @@ HTML_ADMIN = CSS_PADRAO + """
                                 <td>{{ info.linhas }}</td>
                                 <td>
                                     {% if info.linhas > 0 %}
-                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar a tabela {{ info.desc }}?');" style="margin:0;"><button type="submit" class="btn-danger" style="padding: 3px 8px; font-size: 0.85em;">Limpar</button></form>
+                                    <form action="/admin/limpar/{{ t_id }}" method="post" onsubmit="return confirm('Apagar a tabela {{ info.desc }}?');" style="margin:0;"><button type="submit" class="btn-danger">Limpar</button></form>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -780,6 +859,8 @@ HTML_ADMIN = CSS_PADRAO + """
         xhr.send(formData);
     });
 </script>
+</body>
+</html>
 """
 
 # =====================================================================
@@ -792,29 +873,13 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR'])
     if not v_col: return df
 
-    if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
-        df = df[df['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
-    elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-        alvo = str(f['cnpj_alvo']).strip()
-        if f['busca_por'] == 'CNPJ': 
-            df = df[df['CNPJ_FILTRO'].str.contains(alvo, na=False)]
-        else:
-            mask_nome = df['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
-            mask_cnpj = df['CNPJ_FILTRO'].str.contains(alvo, na=False)
-            df = df[mask_nome | mask_cnpj]
-    elif f['tipo_neg'] == 'MISTO':
-        if f['uf_alvo']: df = df[df['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
-        if f['cnpj_alvo']:
-            alvo = str(f['cnpj_alvo']).strip()
-            if f['busca_por'] == 'CNPJ': df = df[df['CNPJ_FILTRO'].str.contains(alvo, na=False)]
-            else:
-                mask_nome = df['NOME_FILTRO'].str.contains(alvo, na=False, case=False)
-                mask_cnpj = df['CNPJ_FILTRO'].str.contains(alvo, na=False)
-                df = df[mask_nome | mask_cnpj]
-
     df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     
-    codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
+    # O Extrator de Códigos Específicos (Arranca de Faixa/Dotação)
+    codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(';') if x.strip()]
+    if not codigos_excecao: # Caso o usuário use vírgula em vez de ponto e vírgula
+        codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
+        
     df['ORIGEM_CALCULO'] = df['ORIGEM_INICIAL']
     mask_exc = df['_COD_LIMPO_'].isin(codigos_excecao) & (len(codigos_excecao) > 0)
     df.loc[mask_exc, 'ORIGEM_CALCULO'] = 'Item Específico'
@@ -851,6 +916,7 @@ def aplicar_reajustes_simulados(df_cruzado, f):
 
 def processa_filtros_request(req):
     f = {
+        'step': req.args.get('step', ''),
         'modo_aplicacao': req.args.get('modo_aplicacao', 'POR_TIPO'),
         'ipca': float(req.args.get('ipca', '0.00') or 0.0),
         'analista': req.args.get('analista', '').strip(),
@@ -863,7 +929,7 @@ def processa_filtros_request(req):
         'sol_linear': float(req.args.get('sol_linear', '0.00') or 0.0),
         'conc_linear': float(req.args.get('conc_linear', '0.00') or 0.0),
         'sol_exc': float(req.args.get('sol_exc', '0.00') or 0.0),
-        'conc_exc': float(request.args.get('conc_exc', '0.00') or 0.0)
+        'conc_exc': float(req.args.get('conc_exc', '0.00') or 0.0)
     }
     f['comp_list'] = req.args.getlist('comp')
     
@@ -885,6 +951,8 @@ def serve_logo():
 @app.route('/')
 def dashboard():
     f = processa_filtros_request(request)
+    step = f['step']
+    
     totais = {'faturamento_total': '0,00', 'total_solicitado': '0,00', 'linhas_faturamento': 0, 'total_concedido': '0,00', 'custo_evitado': '0,00'}
     itens_detalhe = []
     tem_dados = False
@@ -898,10 +966,10 @@ def dashboard():
                 comps_disponiveis = [r[0] for r in res]
         except: pass
     
-    if f['comp_list'] and engine:
+    if step in ['1', '2'] and f['comp_list'] and engine:
         try:
-            format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
-            df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
+            # Farejador Dinâmico Blindado (em Lotes)
+            df_fat = ler_e_filtrar_faturamento(engine, f['comp_list'], f)
             
             if not df_fat.empty:
                 try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
@@ -916,7 +984,14 @@ def dashboard():
                 except: df_pre = pd.DataFrame()
 
                 df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
-                df_final = aplicar_reajustes_simulados(df_cruzado, f)
+                
+                # Se for só o step 1 (Carregar), as taxas são zeradas. Se for step 2 (Calcular), usa as da tela
+                f_calc = f.copy()
+                if step == '1':
+                    for k in f_calc:
+                        if k.startswith('sol_') or k.startswith('conc_'): f_calc[k] = 0.0
+
+                df_final = aplicar_reajustes_simulados(df_cruzado, f_calc)
                 
                 if not df_final.empty:
                     tem_dados = True
@@ -933,6 +1008,7 @@ def dashboard():
                         'custo_evitado': f"{evit_total:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                     }
 
+                    # Renderiza os valores na aba
                     base_grp = df_final.groupby(['ORIGEM_CALCULO', 'TIPO_DESPESA_FINAL'])['VALOR_BASE'].sum().to_dict()
                     for (origem, tipo), valor in base_grp.items():
                         if origem not in bases_dict: bases_dict[origem] = {}
@@ -957,15 +1033,14 @@ def dashboard():
             flash(f"Erro ao processar SQL: {str(e)}", "error")
 
     q_str = request.query_string.decode('utf-8')
-    return render_template_string(HTML_DASHBOARD, totais=totais, itens_detalhe=itens_detalhe, periodo_base=", ".join(f['comp_list']) or "Nenhuma", filtros=f, tem_dados=tem_dados, comps_disponiveis=comps_disponiveis, tipos_despesa=TIPOS_DESPESA, bases_dict=bases_dict, query_string=q_str)
+    return render_template_string(HTML_DASHBOARD, step=step, totais=totais, itens_detalhe=itens_detalhe, periodo_base=", ".join(f['comp_list']) or "Nenhuma", filtros=f, tem_dados=tem_dados, comps_disponiveis=comps_disponiveis, tipos_despesa=TIPOS_DESPESA, bases_dict=bases_dict, query_string=q_str)
 
 @app.route('/exportar')
 def exportar():
     f = processa_filtros_request(request)
     if not f['comp_list'] or not engine: return redirect(url_for('dashboard'))
     try:
-        format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
-        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
+        df_fat = ler_e_filtrar_faturamento(engine, f['comp_list'], f)
         if df_fat.empty: return redirect(url_for('dashboard'))
         try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
         except: df_mat = pd.DataFrame()
@@ -985,7 +1060,7 @@ def exportar():
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_final.to_excel(writer, index=False, sheet_name="Reajuste")
         output.seek(0)
-        return send_file(output, download_name=f"Reajuste_Export.xlsx", as_attachment=True)
+        return send_file(output, download_name="Reajuste_Export.xlsx", as_attachment=True)
     except Exception: return redirect(url_for('dashboard'))
 
 @app.route('/exportar_pdf')
@@ -993,8 +1068,7 @@ def exportar_pdf():
     f = processa_filtros_request(request)
     if not f['comp_list'] or not engine: return redirect(url_for('dashboard'))
     try:
-        format_strings = ','.join([f"'{c}'" for c in f['comp_list']])
-        df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"), con=engine)
+        df_fat = ler_e_filtrar_faturamento(engine, f['comp_list'], f)
         if df_fat.empty: return redirect(url_for('dashboard'))
         try: df_mat = pd.read_sql(text("SELECT * FROM materiais"), con=engine)
         except: df_mat = pd.DataFrame()
@@ -1035,7 +1109,7 @@ def exportar_pdf():
         pdf_bytes = build_analysis_pdf_bytes(data_pdf)
         response = make_response(pdf_bytes)
         response.headers.set('Content-Type', 'application/pdf')
-        response.headers.set('Content-Disposition', f'attachment; filename="Relatorio_Impacto.pdf"')
+        response.headers.set('Content-Disposition', 'attachment; filename="Relatorio_Impacto.pdf"')
         return response
     except Exception as e:
         flash(f"Erro ao gerar PDF: {str(e)}", "error")
