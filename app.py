@@ -153,6 +153,11 @@ CSS_PADRAO = """
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
     .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
+    
+    /* ESTILOS DA BARRA DE PROGRESSO */
+    .progress-wrapper { background: #eef2f5; border-radius: 4px; overflow: hidden; height: 25px; margin-top: 20px; border: 1px solid #ccc; display: none; }
+    .progress-bar { background: var(--verde-ok); height: 100%; width: 0%; transition: width 0.3s ease, background-color 0.5s ease; }
+    .progress-text { margin-top: 8px; font-size: 0.95em; color: var(--azul-postal); font-weight: bold; display: none; text-align: center; }
 </style>
 """
 
@@ -304,7 +309,8 @@ HTML_ADMIN = CSS_PADRAO + """
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px;">
         <div class="card" style="border-top: 4px solid var(--azul-claro);">
             <h3 style="margin-top:0; color: var(--azul-postal);">Upload Inteligente em Massa</h3>
-            <form action="/admin_upload" method="post" enctype="multipart/form-data">
+            
+            <form id="upload-form" action="/admin_upload" method="post" enctype="multipart/form-data">
                 <div class="form-group">
                     <label>Selecione a Base de Destino:</label>
                     <select name="tipo_base" style="width: 100%; padding: 10px;" required>
@@ -332,7 +338,12 @@ HTML_ADMIN = CSS_PADRAO + """
                     <input type="file" name="arquivos_soltos" style="width: 100%; padding: 15px; background: #fafafa; border: 2px dashed #999;" multiple>
                 </div>
                 
-                <button type="submit" class="btn btn-success" style="width: 100%; font-size: 16px; padding: 12px;">Injetar Dados no Servidor</button>
+                <button type="submit" id="upload-btn" class="btn btn-success" style="width: 100%; font-size: 16px; padding: 12px;">Injetar Dados no Servidor</button>
+                
+                <div id="progress-wrapper" class="progress-wrapper">
+                    <div id="progress-bar" class="progress-bar"></div>
+                </div>
+                <div id="progress-text" class="progress-text">Iniciando upload... 0%</div>
             </form>
         </div>
 
@@ -385,6 +396,53 @@ HTML_ADMIN = CSS_PADRAO + """
         </div>
     </div>
 </div>
+
+<script>
+    const form = document.getElementById('upload-form');
+    form.addEventListener('submit', function(e) {
+        e.preventDefault(); // Impede o site de recarregar a tela em branco
+        const formData = new FormData(form);
+        const xhr = new XMLHttpRequest();
+        
+        // Liga o visual da barra
+        document.getElementById('progress-wrapper').style.display = 'block';
+        document.getElementById('progress-text').style.display = 'block';
+        const btn = document.getElementById('upload-btn');
+        btn.disabled = true; // Trava o botão pra não clicar duas vezes
+        btn.innerText = 'Transmissão em andamento...';
+        btn.style.backgroundColor = '#999';
+
+        // Escuta o progresso da rede em tempo real
+        xhr.upload.addEventListener('progress', function(e) {
+            if (e.lengthComputable) {
+                const percent = Math.round((e.loaded / e.total) * 100);
+                document.getElementById('progress-bar').style.width = percent + '%';
+                
+                if (percent < 100) {
+                    document.getElementById('progress-text').innerText = 'Enviando arquivos pela rede: ' + percent + '%';
+                } else {
+                    document.getElementById('progress-text').innerText = 'Upload 100% concluído! O Banco de Dados está processando as linhas agora (Isso leva alguns minutos, não feche a página)...';
+                    document.getElementById('progress-bar').style.backgroundColor = 'var(--amarelo-postal)';
+                }
+            }
+        });
+
+        // Quando o banco de dados finalmente responder
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                document.open();
+                document.write(xhr.responseText); // Recarrega o site com a mensagem verde de sucesso
+                document.close();
+            } else {
+                alert('Erro na resposta do servidor. O arquivo pode ser muito grande ou a internet oscilou.');
+                window.location.reload();
+            }
+        };
+
+        xhr.open('POST', '/admin_upload', true);
+        xhr.send(formData);
+    });
+</script>
 """
 
 # =====================================================================
