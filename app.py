@@ -40,12 +40,11 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
-def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=False, uf_regional=None, itens_excecao=None):
+def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
     try:
         df = df_fat.copy()
         
-        # Alinhamento das colunas de localidade
-        for col in ['UF', 'AP', 'CNPJ']:
+        for col in ['UF', 'AP', 'CNPJ', 'NOME_FANTASIA_PRESTADOR']:
             if col not in df.columns:
                 df[col] = None
 
@@ -78,7 +77,6 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
-        # Mapeamento e classificação dos tipos de despesa reais
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
         if t_col:
             df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
@@ -106,7 +104,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
         return pd.DataFrame()
 
 # =====================================================================
-# CLASSE DO GERADOR DE PDF (BIBLIOTECA FPDF)
+# CLASSE DO GERADOR DE PDF
 # =====================================================================
 class ReajustePDF(FPDF):
     def header(self):
@@ -133,8 +131,13 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     pdf.cell(0, 8, "  DADOS DO PROCESSO", 0, 1, "L", fill=True)
     pdf.set_font("Arial", "", 10)
     pdf.cell(0, 7, f"Competencia Analisada: {data.get('comp', '-')}", 0, 1, "L")
-    pdf.cell(0, 7, f"UF Alvo: {data.get('uf_alvo', 'TODAS')}", 0, 1, "L")
-    pdf.cell(0, 7, f"CNPJ Alvo: {data.get('cnpj_alvo', 'TODOS')}", 0, 1, "L")
+    pdf.cell(0, 7, f"Modo de Aplicacao: {data.get('modo_aplicacao', 'POR TIPO')}", 0, 1, "L")
+    pdf.cell(0, 7, f"IPCA do Periodo: {data.get('ipca', '0,00')}%", 0, 1, "L")
+    pdf.cell(0, 7, f"Tipo de Negociacao: {data.get('tipo_neg', 'TODOS')}", 0, 1, "L")
+    if data.get('tipo_neg') in ['ESTADO', 'MISTO']:
+        pdf.cell(0, 7, f"UF Alvo: {data.get('uf_alvo', 'N/A')}", 0, 1, "L")
+    if data.get('tipo_neg') in ['DIFERENCIADA', 'MISTO']:
+        pdf.cell(0, 7, f"Alvo ({data.get('busca_por', 'CNPJ')}): {data.get('cnpj_alvo', 'N/A')}", 0, 1, "L")
     pdf.ln(5)
 
     categorias = {}
@@ -199,6 +202,18 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
 
     pdf.cell(100, 10, "CUSTO EVITADO (ECONOMIA):", 0, 0)
     pdf.cell(0, 10, f"R$ {custo_evitado:,.2f}", 0, 1, "R")
+    pdf.ln(15)
+
+    # Assinaturas
+    if pdf.get_y() > 250: pdf.add_page()
+    pdf.set_text_color(0, 0, 0)
+    pdf.set_font("Arial", "", 10)
+    y_sig = pdf.get_y()
+    pdf.line(20, y_sig+15, 90, y_sig+15)
+    pdf.line(120, y_sig+15, 190, y_sig+15)
+    pdf.set_y(y_sig + 17)
+    pdf.cell(95, 5, data.get("analista", "Analista Responsavel"), 0, 0, "C")
+    pdf.cell(95, 5, data.get("gestor", "Gestor Aprovador"), 0, 1, "C")
     
     return pdf.output(dest="S").encode("latin-1", errors="ignore")
 
@@ -233,185 +248,314 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# HTML DASHBOARD (Com opções de Solicitado x Concedido e Botão PDF)
+# CSS E HTML EMBUTIDOS (DESIGN IDENTIDADE VISUAL POSTAL SAÚDE MODERNO)
 # =====================================================================
 CSS_PADRAO = """
 <style>
-    :root { --azul-postal: #002c52; --azul-claro: #005a92; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #eef2f5; }
-    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; }
-    .header { background-color: var(--azul-postal); color: white; padding: 15px 40px; display: flex; justify-content: space-between; align-items: center; border-bottom: 5px solid var(--amarelo-postal); }
-    .logo-img { height: 55px; background: white; padding: 8px 15px; border-radius: 6px; box-shadow: 0 2px 4px rgba(0,0,0,0.2); }
-    .container { padding: 20px 40px; }
-    .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 4px solid var(--azul-claro); }
+    :root { --azul-postal: #002c52; --azul-claro: #005a92; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #f4f7f6; --cinza-claro: #eef2f5; }
+    body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; display: flex; min-height: 100vh; }
+    
+    /* LAYOUT: SIDEBAR E MAIN CONTENT */
+    .sidebar { width: 280px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; }
+    .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+    
+    .logo-img { max-width: 100%; height: auto; margin-bottom: 10px; }
+    .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 15px; }
+    .sidebar-section h4 { color: var(--azul-postal); margin: 0 0 10px 0; font-size: 1em; }
+    
+    .header { background-color: white; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #ddd; }
+    .header h2 { margin: 0; color: var(--azul-postal); font-size: 1.5em; }
+    
+    .container { padding: 30px 40px; }
+    .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px; border-top: 4px solid var(--azul-claro); }
+    
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px; }
     .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; }
+    
     .form-group { margin-bottom: 15px; }
-    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: var(--azul-postal); font-size: 0.9em; }
-    .form-control { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 1em; }
+    .form-group label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; font-size: 0.85em; }
+    .form-control { width: 100%; padding: 8px 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 0.95em; transition: border-color 0.3s; }
+    .form-control:focus { border-color: var(--azul-claro); outline: none; }
+    
+    .radio-group { display: flex; gap: 15px; align-items: center; margin-top: 5px; }
+    .radio-group label { font-weight: normal; margin: 0; cursor: pointer; display: flex; align-items: center; gap: 5px; }
+    
+    /* BLOCOS DINÂMICOS */
+    .dynamic-block { display: none; background: #fafafa; padding: 15px; border: 1px dashed #ccc; border-radius: 5px; margin-top: 15px; }
+    
     .metric-box { padding: 15px; border: 1px solid #eee; border-radius: 6px; text-align: center; background: #fafafa; }
     .metric-box h4 { margin: 0 0 10px 0; color: #666; font-size: 0.85em; text-transform: uppercase; }
     .metric-box .valor { font-size: 1.6em; font-weight: bold; color: var(--azul-postal); margin-bottom: 5px; }
     .metric-box .sub { font-size: 0.85em; color: #888; }
     .impacto-card { background-color: #fff9e6; border-top: 4px solid var(--amarelo-postal); }
+    
     table { width: 100%; border-collapse: collapse; margin-top: 15px; }
-    th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; border-bottom: 3px solid var(--amarelo-postal); }
-    td { padding: 10px 12px; border-bottom: 1px solid #eee; }
+    th { background-color: var(--azul-postal); color: white; padding: 12px; text-align: left; font-size: 0.9em; }
+    td { padding: 10px 12px; border-bottom: 1px solid #eee; font-size: 0.9em; }
     tr:hover { background-color: #f4f7f6; }
-    .btn { background-color: var(--amarelo-postal); color: var(--azul-postal); font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; }
-    .btn:hover { background-color: #e0a100; }
-    .btn-success { background-color: var(--verde-ok); color: white; }
-    .btn-danger { background-color: var(--vermelho-alerta); color: white; border: none; padding: 5px 10px; border-radius: 4px; cursor: pointer; }
-    .btn-pdf { background-color: #cc0000; color: white; margin-left: 10px; }
-    .btn-pdf:hover { background-color: #990000; }
+    
+    .btn { background-color: var(--azul-claro); color: white; font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; transition: background 0.3s; }
+    .btn:hover { background-color: var(--azul-postal); }
+    .btn-action { background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px; }
+    .btn-action:hover { background-color: #e0a100; }
+    .btn-success { background-color: var(--verde-ok); }
+    .btn-pdf { background-color: #cc0000; margin-left: 10px; }
+    .btn-danger { background-color: var(--vermelho-alerta); padding: 5px 10px; font-size: 0.85em; }
+    
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
-    .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
 </style>
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
-<div class="header">
-    <div style="display: flex; align-items: center; gap: 20px;">
-        <img src="/Logo_Postal-03.png" class="logo-img">
-        <div>
-            <h2 style="margin:0;">GERED - Sistema de Impacto de Reajuste</h2>
-            <p style="margin:5px 0 0 0; color: #d4e3ef;">Competência Selecionada: <strong>{{ periodo_base }}</strong></p>
+<!-- SIDEBAR (MENU LATERAL) -->
+<form action="/" method="get" id="mainForm" style="display: contents;">
+    <div class="sidebar">
+        <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
+        
+        <div class="sidebar-section">
+            <h4>Configurações para reajustar</h4>
+            <div class="form-group">
+                <label>Modo de aplicação</label>
+                <div class="radio-group">
+                    <label><input type="radio" name="modo_aplicacao" value="POR_TIPO" onclick="toggleModo()" {% if filtros.modo_aplicacao != 'LINEAR' %}checked{% endif %}> Por tipo</label>
+                    <label><input type="radio" name="modo_aplicacao" value="LINEAR" onclick="toggleModo()" {% if filtros.modo_aplicacao == 'LINEAR' %}checked{% endif %}> Linear</label>
+                </div>
+            </div>
+            <div class="form-group" style="margin-top: 15px;">
+                <label>IPCA do período (%)</label>
+                <input type="number" step="0.01" name="ipca" class="form-control" value="{{ filtros.ipca }}">
+            </div>
+            <div class="form-group">
+                <label>Período da Análise (Competência)</label>
+                <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="Ex: 092024" required>
+            </div>
         </div>
-    </div>
-    <a href="/admin" class="btn">Painel Admin (Uploads)</a>
-</div>
 
-<div class="container">
-    {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
+        <div class="sidebar-section">
+            <h4>Exceções por Item</h4>
+            <div class="form-group">
+                <label>Códigos dos Itens (Opcional)</label>
+                <textarea name="itens_exc" class="form-control" rows="3" placeholder="Digite os códigos separados por vírgula"></textarea>
+            </div>
+        </div>
 
-    <div class="card" style="border-top: 4px solid var(--azul-postal);">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Configuração de Negociação e Taxas</h3>
-        <form action="/" method="get">
-            <div class="grid-4">
-                <div class="form-group">
-                    <label>Competência Alvo:</label>
-                    <input type="text" name="comp" class="form-control" value="{{ filtros.comp }}" placeholder="Ex: 092024" required>
-                </div>
-                <div class="form-group">
-                    <label>Tipo de Negociação:</label>
-                    <select name="tipo_neg" class="form-control">
-                        <option value="TODOS" {% if filtros.tipo_neg == 'TODOS' %}selected{% endif %}>Todos (Geral)</option>
-                        <option value="ESTADO" {% if filtros.tipo_neg == 'ESTADO' %}selected{% endif %}>Por UF</option>
-                        <option value="DIFERENCIADO" {% if filtros.tipo_neg == 'DIFERENCIADO' %}selected{% endif %}>Por CNPJ</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>UF Alvo:</label>
-                    <input type="text" name="uf_alvo" class="form-control" value="{{ filtros.uf_alvo }}">
-                </div>
-                <div class="form-group">
-                    <label>CNPJ Alvo:</label>
-                    <input type="text" name="cnpj_alvo" class="form-control" value="{{ filtros.cnpj_alvo }}">
-                </div>
+        <div class="sidebar-section" style="border-bottom: none;">
+            <h4>Identificação e Assinaturas</h4>
+            <div class="form-group">
+                <label>Nome do Analista</label>
+                <input type="text" name="analista" class="form-control" value="{{ filtros.analista }}">
             </div>
-
-            <hr style="border:0; border-top:1px solid #ccc; margin: 15px 0;">
-            
-            <h4 style="margin: 0 0 10px 0; color: var(--azul-postal);">1. Regra Geral de Reajuste (Origem da Tabela)</h4>
-            <div class="grid-4" style="background:#f4f7f6; padding:15px; border-radius:5px;">
-                <div class="form-group"><label>Dotação (% Solicitado):</label><input type="number" step="0.01" name="sol_dotacao" class="form-control" value="{{ filtros.sol_dotacao }}"></div>
-                <div class="form-group"><label>Dotação (% Concedido):</label><input type="number" step="0.01" name="conc_dotacao" class="form-control" value="{{ filtros.conc_dotacao }}"></div>
-                <div class="form-group"><label>Faixa Evento (% Solicitado):</label><input type="number" step="0.01" name="sol_faixa" class="form-control" value="{{ filtros.sol_faixa }}"></div>
-                <div class="form-group"><label>Faixa Evento (% Concedido):</label><input type="number" step="0.01" name="conc_faixa" class="form-control" value="{{ filtros.conc_faixa }}"></div>
+            <div class="form-group">
+                <label>Nome do Gestor</label>
+                <input type="text" name="gestor" class="form-control" value="{{ filtros.gestor }}">
             </div>
-
-            <h4 style="margin: 15px 0 10px 0; color: var(--azul-claro);">2. Exceções por Tipo de Despesa (% Concedido)</h4>
-            <p style="font-size:0.85em; color:#666; margin-top:-5px;">*Se preenchido, substitui a Regra Geral (Concedido) para o respectivo grupo.</p>
-            <div class="grid-4">
-                <div class="form-group"><label>Dietas:</label><input type="number" step="0.01" name="p_dietas" class="form-control" value="{{ filtros.p_dietas }}"></div>
-                <div class="form-group"><label>Perfurocortantes:</label><input type="number" step="0.01" name="p_perfuro" class="form-control" value="{{ filtros.p_perfuro }}"></div>
-                <div class="form-group"><label>Anestesista:</label><input type="number" step="0.01" name="p_anest" class="form-control" value="{{ filtros.p_anest }}"></div>
-                <div class="form-group"><label>Materiais:</label><input type="number" step="0.01" name="p_mat" class="form-control" value="{{ filtros.p_mat }}"></div>
-                
-                <div class="form-group"><label>Medicamentos:</label><input type="number" step="0.01" name="p_med" class="form-control" value="{{ filtros.p_med }}"></div>
-                <div class="form-group"><label>Diárias:</label><input type="number" step="0.01" name="p_dia" class="form-control" value="{{ filtros.p_dia }}"></div>
-                <div class="form-group"><label>Taxas:</label><input type="number" step="0.01" name="p_taxa" class="form-control" value="{{ filtros.p_taxa }}"></div>
-                <div class="form-group"><label>Gases:</label><input type="number" step="0.01" name="p_gas" class="form-control" value="{{ filtros.p_gas }}"></div>
-                
-                <div class="form-group"><label>OPME:</label><input type="number" step="0.01" name="p_opme" class="form-control" value="{{ filtros.p_opme }}"></div>
-                <div class="form-group"><label>SADT / Exames:</label><input type="number" step="0.01" name="p_sadt" class="form-control" value="{{ filtros.p_sadt }}"></div>
-                <div class="form-group"><label>Honorários:</label><input type="number" step="0.01" name="p_hon" class="form-control" value="{{ filtros.p_hon }}"></div>
-                <div class="form-group"><label style="color:var(--amarelo-postal);">Outros / Geral:</label><input type="number" step="0.01" name="p_outros" class="form-control" value="{{ filtros.p_outros }}"></div>
-            </div>
-            
-            <div style="text-align: right; margin-top: 10px;">
-                <button type="submit" class="btn" style="width: 250px; font-size:1.05em;">Calcular Impacto</button>
-            </div>
-        </form>
-    </div>
-
-    <div class="card">
-        <div style="display: flex; justify-content: space-between; align-items: center;">
-            <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
-            {% if tem_dados %}
-            <div>
-                {% set export_params = 'comp='~filtros.comp~'&tipo_neg='~filtros.tipo_neg~'&uf_alvo='~filtros.uf_alvo~'&cnpj_alvo='~filtros.cnpj_alvo~'&sol_dotacao='~filtros.sol_dotacao~'&conc_dotacao='~filtros.conc_dotacao~'&sol_faixa='~filtros.sol_faixa~'&conc_faixa='~filtros.conc_faixa~'&p_dietas='~filtros.p_dietas~'&p_perfuro='~filtros.p_perfuro~'&p_anest='~filtros.p_anest~'&p_mat='~filtros.p_mat~'&p_med='~filtros.p_med~'&p_dia='~filtros.p_dia~'&p_taxa='~filtros.p_taxa~'&p_gas='~filtros.p_gas~'&p_opme='~filtros.p_opme~'&p_sadt='~filtros.p_sadt~'&p_hon='~filtros.p_hon~'&p_outros='~filtros.p_outros %}
-                <a href="/exportar?{{ export_params }}" class="btn btn-success">📥 Baixar Excel</a>
-                <a href="/exportar_pdf?{{ export_params }}" class="btn btn-pdf" target="_blank">📄 Baixar PDF Oficial</a>
-            </div>
-            {% endif %}
         </div>
         
-        <div class="grid-4" style="margin-top: 15px;">
-            <div class="metric-box">
-                <h4>Faturamento Lido (Base)</h4>
-                <div class="valor">R$ {{ totais.faturamento_total }}</div>
-                <div class="sub">{{ totais.linhas_faturamento }} linhas aplicadas</div>
+        <div style="flex-grow: 1;"></div>
+        <button type="submit" class="btn btn-action">Carregar e Cruzar Bases</button>
+    </div>
+
+    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
+    <div class="main-content">
+        <div class="header">
+            <h2>Sistema de reajuste de discussão</h2>
+            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Painel Admin BD</a>
+        </div>
+
+        <div class="container">
+            {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
+
+            <div class="card" style="border-top: none;">
+                <div class="form-group" style="max-width: 400px;">
+                    <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
+                    <select name="tipo_neg" id="tipo_neg" class="form-control" onchange="toggleFiltros()" style="font-size: 1.1em; padding: 10px;">
+                        <option value="TODOS" {% if filtros.tipo_neg == 'TODOS' %}selected{% endif %}>Selecione as opções (Padrão: Todos)</option>
+                        <option value="DIFERENCIADA" {% if filtros.tipo_neg == 'DIFERENCIADA' %}selected{% endif %}>DIFERENCIADA</option>
+                        <option value="ESTADO" {% if filtros.tipo_neg == 'ESTADO' %}selected{% endif %}>ESTADO</option>
+                        <option value="MISTO" {% if filtros.tipo_neg == 'MISTO' %}selected{% endif %}>MISTO</option>
+                    </select>
+                </div>
+
+                <!-- BLOCO DINÂMICO: ESTADO -->
+                <div id="div_estado" class="dynamic-block">
+                    <div class="form-group" style="max-width: 200px;">
+                        <label>Digite a UF Alvo (Ex: GO, RS):</label>
+                        <input type="text" name="uf_alvo" class="form-control" value="{{ filtros.uf_alvo }}">
+                    </div>
+                </div>
+
+                <!-- BLOCO DINÂMICO: DIFERENCIADA -->
+                <div id="div_diferenciada" class="dynamic-block">
+                    <div class="form-group">
+                        <label>Buscar por:</label>
+                        <div class="radio-group">
+                            <label><input type="radio" name="busca_por" value="CNPJ" {% if filtros.busca_por != 'GRUPO' %}checked{% endif %}> CNPJ</label>
+                            <label><input type="radio" name="busca_por" value="GRUPO" {% if filtros.busca_por == 'GRUPO' %}checked{% endif %}> GRUPOPRESTADOR / NOME</label>
+                        </div>
+                    </div>
+                    <div class="form-group" style="max-width: 400px;">
+                        <label>Digite o CNPJ ou Nome:</label>
+                        <input type="text" name="cnpj_alvo" class="form-control" value="{{ filtros.cnpj_alvo }}" placeholder="Digite o texto de busca...">
+                    </div>
+                </div>
             </div>
-            <div class="metric-box">
-                <h4>Total Solicitado</h4>
-                <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_solicitado }}</div>
-                <div class="sub">Com taxas de origem (solicitadas)</div>
+
+            <!-- BLOCO DE TAXAS -->
+            <div class="card">
+                <h3 style="margin-top:0; color: var(--azul-postal);">Regras de Reajuste</h3>
+                <p style="color:#666; font-size:0.9em; margin-top:-5px;">Defina os percentuais gerais baseados na origem da tabela.</p>
+                
+                <div class="grid-4" style="background:#f4f7f6; padding:15px; border-radius:5px; margin-bottom: 20px;">
+                    <div class="form-group"><label>Dotação (% Solicitado):</label><input type="number" step="0.01" name="sol_dotacao" class="form-control" value="{{ filtros.sol_dotacao }}"></div>
+                    <div class="form-group"><label>Dotação (% Concedido):</label><input type="number" step="0.01" name="conc_dotacao" class="form-control" value="{{ filtros.conc_dotacao }}"></div>
+                    <div class="form-group"><label>Faixa Evento (% Solicitado):</label><input type="number" step="0.01" name="sol_faixa" class="form-control" value="{{ filtros.sol_faixa }}"></div>
+                    <div class="form-group"><label>Faixa Evento (% Concedido):</label><input type="number" step="0.01" name="conc_faixa" class="form-control" value="{{ filtros.conc_faixa }}"></div>
+                </div>
+
+                <!-- BLOCO DINÂMICO: POR TIPO (ESCONDIDO SE LINEAR) -->
+                <div id="div_por_tipo">
+                    <h4 style="margin: 0 0 10px 0; color: var(--azul-claro);">Exceções por Tipo de Despesa (% Concedido)</h4>
+                    <p style="font-size:0.85em; color:#666; margin-top:-5px;">*Se preenchido, substitui a Regra Geral (Concedido) para o respectivo grupo.</p>
+                    <div class="grid-4">
+                        <div class="form-group"><label>Dietas:</label><input type="number" step="0.01" name="p_dietas" class="form-control" value="{{ filtros.p_dietas }}"></div>
+                        <div class="form-group"><label>Perfurocortantes:</label><input type="number" step="0.01" name="p_perfuro" class="form-control" value="{{ filtros.p_perfuro }}"></div>
+                        <div class="form-group"><label>Anestesista:</label><input type="number" step="0.01" name="p_anest" class="form-control" value="{{ filtros.p_anest }}"></div>
+                        <div class="form-group"><label>Materiais:</label><input type="number" step="0.01" name="p_mat" class="form-control" value="{{ filtros.p_mat }}"></div>
+                        
+                        <div class="form-group"><label>Medicamentos:</label><input type="number" step="0.01" name="p_med" class="form-control" value="{{ filtros.p_med }}"></div>
+                        <div class="form-group"><label>Diárias:</label><input type="number" step="0.01" name="p_dia" class="form-control" value="{{ filtros.p_dia }}"></div>
+                        <div class="form-group"><label>Taxas:</label><input type="number" step="0.01" name="p_taxa" class="form-control" value="{{ filtros.p_taxa }}"></div>
+                        <div class="form-group"><label>Gases:</label><input type="number" step="0.01" name="p_gas" class="form-control" value="{{ filtros.p_gas }}"></div>
+                        
+                        <div class="form-group"><label>OPME:</label><input type="number" step="0.01" name="p_opme" class="form-control" value="{{ filtros.p_opme }}"></div>
+                        <div class="form-group"><label>SADT / Exames:</label><input type="number" step="0.01" name="p_sadt" class="form-control" value="{{ filtros.p_sadt }}"></div>
+                        <div class="form-group"><label>Honorários:</label><input type="number" step="0.01" name="p_hon" class="form-control" value="{{ filtros.p_hon }}"></div>
+                        <div class="form-group"><label style="color:var(--amarelo-postal);">Outros / Geral:</label><input type="number" step="0.01" name="p_outros" class="form-control" value="{{ filtros.p_outros }}"></div>
+                    </div>
+                </div>
+                
+                <!-- BLOCO DINÂMICO: LINEAR -->
+                <div id="div_linear" style="display:none; background:#fde8e8; padding:15px; border-radius:5px; border:1px solid var(--vermelho-alerta);">
+                    <h4 style="margin: 0 0 5px 0; color: var(--vermelho-alerta);">Modo Linear Ativado</h4>
+                    <p style="font-size:0.85em; color:#666; margin-bottom:10px;">Uma única taxa de exceção será aplicada para todos os grupos, substituindo as regras originais de concessão.</p>
+                    <div class="form-group" style="max-width: 200px;">
+                        <label>Taxa Única Linear (%):</label>
+                        <input type="number" step="0.01" name="p_linear" class="form-control" value="{{ filtros.p_linear }}">
+                    </div>
+                </div>
             </div>
-            <div class="metric-box">
-                <h4>Total Concedido</h4>
-                <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
-                <div class="sub">Com regras e exceções aplicadas</div>
+
+            <!-- RESULTADOS -->
+            <div class="card">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
+                    {% if tem_dados %}
+                    <div>
+                        <!-- Passando todos os filtros via GET para download -->
+                        {% set export_params = 'comp='~filtros.comp~'&tipo_neg='~filtros.tipo_neg~'&uf_alvo='~filtros.uf_alvo~'&cnpj_alvo='~filtros.cnpj_alvo~'&busca_por='~filtros.busca_por~'&modo_aplicacao='~filtros.modo_aplicacao~'&ipca='~filtros.ipca~'&analista='~filtros.analista~'&gestor='~filtros.gestor~'&sol_dotacao='~filtros.sol_dotacao~'&conc_dotacao='~filtros.conc_dotacao~'&sol_faixa='~filtros.sol_faixa~'&conc_faixa='~filtros.conc_faixa~'&p_linear='~filtros.p_linear~'&p_dietas='~filtros.p_dietas~'&p_perfuro='~filtros.p_perfuro~'&p_anest='~filtros.p_anest~'&p_mat='~filtros.p_mat~'&p_med='~filtros.p_med~'&p_dia='~filtros.p_dia~'&p_taxa='~filtros.p_taxa~'&p_gas='~filtros.p_gas~'&p_opme='~filtros.p_opme~'&p_sadt='~filtros.p_sadt~'&p_hon='~filtros.p_hon~'&p_outros='~filtros.p_outros %}
+                        <a href="/exportar?{{ export_params }}" class="btn btn-success">📥 Excel</a>
+                        <a href="/exportar_pdf?{{ export_params }}" class="btn btn-pdf" target="_blank">📄 PDF</a>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div class="grid-4" style="margin-top: 15px;">
+                    <div class="metric-box">
+                        <h4>Faturamento Lido (Base)</h4>
+                        <div class="valor">R$ {{ totais.faturamento_total }}</div>
+                        <div class="sub">{{ totais.linhas_faturamento }} linhas processadas</div>
+                    </div>
+                    <div class="metric-box">
+                        <h4>Total Solicitado</h4>
+                        <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_solicitado }}</div>
+                        <div class="sub">Com taxas de origem</div>
+                    </div>
+                    <div class="metric-box">
+                        <h4>Total Concedido</h4>
+                        <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
+                        <div class="sub">Com regras aplicadas</div>
+                    </div>
+                    <div class="metric-box impacto-card">
+                        <h4>Custo Evitado</h4>
+                        <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.custo_evitado }}</div>
+                        <div class="sub">Solicitado - Concedido</div>
+                    </div>
+                </div>
             </div>
-            <div class="metric-box impacto-card">
-                <h4>Custo Evitado (Economia)</h4>
-                <div class="valor" style="color: var(--vermelho-alerta);">R$ {{ totais.custo_evitado }}</div>
-                <div class="sub">Diferença salva na negociação</div>
+
+            <div class="card">
+                <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento de Impacto por Classificação</h3>
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Grupo de Despesa</th>
+                            <th>Origem Tabela</th>
+                            <th>Qtd Itens</th>
+                            <th>Base Lida (R$)</th>
+                            <th>Solicitado (R$)</th>
+                            <th>Concedido (R$)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in itens_detalhe %}
+                        <tr>
+                            <td><strong>{{ item.tipo_despesa }}</strong></td>
+                            <td><span style="background: #eef2f5; padding: 4px 8px; border-radius: 4px; font-size:0.9em;">{{ item.origem }}</span></td>
+                            <td>{{ item.qtd }}</td>
+                            <td>R$ {{ item.valor_base }}</td>
+                            <td>R$ {{ item.valor_sol }}</td>
+                            <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.valor_con }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="6" style="text-align: center; color: #888; padding: 30px;">Aguardando filtros. Clique em Carregar e Cruzar Bases na barra lateral.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
             </div>
         </div>
     </div>
+</form>
 
-    <div class="card">
-        <h3 style="margin-top:0; color: var(--azul-postal);">Detalhamento de Impacto por Classificação</h3>
-        <table>
-            <thead>
-                <tr>
-                    <th>Grupo de Despesa</th>
-                    <th>Origem Tabela</th>
-                    <th>Qtd Itens</th>
-                    <th>Base Lida (R$)</th>
-                    <th>Solicitado (R$)</th>
-                    <th>Concedido (R$)</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in itens_detalhe %}
-                <tr>
-                    <td><strong>{{ item.tipo_despesa }}</strong></td>
-                    <td><span style="background: #eef2f5; padding: 4px 8px; border-radius: 4px; font-size:0.9em;">{{ item.origem }}</span></td>
-                    <td>{{ item.qtd }}</td>
-                    <td>R$ {{ item.valor_base }}</td>
-                    <td>R$ {{ item.valor_sol }}</td>
-                    <td style="color: var(--verde-ok); font-weight: bold;">R$ {{ item.valor_con }}</td>
-                </tr>
-                {% else %}
-                <tr>
-                    <td colspan="6" style="text-align: center; color: #888; padding: 30px;">Aguardando filtros. Digite a competência e execute.</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+<script>
+    // JS para controlar a interface de Filtros de Negociação
+    function toggleFiltros() {
+        var neg = document.getElementById("tipo_neg").value;
+        var divEst = document.getElementById("div_estado");
+        var divDif = document.getElementById("div_diferenciada");
+        
+        divEst.style.display = (neg === "ESTADO" || neg === "MISTO") ? "block" : "none";
+        divDif.style.display = (neg === "DIFERENCIADA" || neg === "MISTO") ? "block" : "none";
+    }
+
+    // JS para controlar o Modo de Aplicação (Por Tipo / Linear)
+    function toggleModo() {
+        var radios = document.getElementsByName('modo_aplicacao');
+        var modo = 'POR_TIPO';
+        for (var i = 0; i < radios.length; i++) {
+            if (radios[i].checked) { modo = radios[i].value; break; }
+        }
+        
+        var divTipo = document.getElementById('div_por_tipo');
+        var divLinear = document.getElementById('div_linear');
+        
+        if (modo === 'LINEAR') {
+            divTipo.style.display = 'none';
+            divLinear.style.display = 'block';
+        } else {
+            divTipo.style.display = 'block';
+            divLinear.style.display = 'none';
+        }
+    }
+
+    // Roda as funções no carregamento da página para manter os estados
+    window.onload = function() {
+        toggleFiltros();
+        toggleModo();
+    };
+</script>
 """
 
 HTML_ADMIN = CSS_PADRAO + """
@@ -576,13 +720,27 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     if not v_col:
         return df
 
+    # Filtros de Abrangência (Estado, CNPJ ou Grupo)
     if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
         df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
-    elif f['tipo_neg'] == 'DIFERENCIADO' and f['cnpj_alvo']:
-        df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+    elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
+        if f['busca_por'] == 'CNPJ':
+            df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+        else:
+            # Busca pelo Nome do Grupo/Prestador ou CNPJ
+            mask_nome = df['NOME_FANTASIA_PRESTADOR'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False, case=False)
+            mask_cnpj = df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)
+            df = df[mask_nome | mask_cnpj]
     elif f['tipo_neg'] == 'MISTO':
-        if f['uf_alvo']: df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
-        if f['cnpj_alvo']: df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+        if f['uf_alvo']: 
+            df = df[df['UF'].fillna('').astype(str).str.upper() == f['uf_alvo'].upper()]
+        if f['cnpj_alvo']:
+            if f['busca_por'] == 'CNPJ':
+                df = df[df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)]
+            else:
+                mask_nome = df['NOME_FANTASIA_PRESTADOR'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False, case=False)
+                mask_cnpj = df['CNPJ'].fillna('').astype(str).str.contains(f['cnpj_alvo'], na=False)
+                df = df[mask_nome | mask_cnpj]
 
     df['VALOR_BASE'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     
@@ -590,21 +748,27 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     df['TAXA_SOLICITADA'] = np.where(df['ORIGEM'] == 'Dotação', f['sol_dotacao'], f['sol_faixa'])
     df['TAXA_CONCEDIDA'] = np.where(df['ORIGEM'] == 'Dotação', f['conc_dotacao'], f['conc_faixa'])
 
-    # EXCEÇÕES (Substituem a taxa concedida caso o campo esteja preenchido e seja diferente de 0.0)
-    taxas_conhecidas = {
-        'DIETAS': f['p_dietas'], 'PERFUROCORTANTES': f['p_perfuro'], 'ANESTESISTA': f['p_anest'],
-        'MATERIAIS': f['p_mat'], 'MEDICAMENTOS': f['p_med'], 'DIARIAS': f['p_dia'],
-        'TAXAS': f['p_taxa'], 'GASES': f['p_gas'], 'OPME': f['p_opme'],
-        'SADT': f['p_sadt'], 'HONORARIOS': f['p_hon']
-    }
-
-    for grupo, taxa in taxas_conhecidas.items():
-        if taxa != 0.0:
-            df.loc[df['TIPO_DESPESA_FINAL'] == grupo, 'TAXA_CONCEDIDA'] = taxa
+    # MODO LINEAR (Esmaga tudo com a mesma taxa concedida)
+    if f['modo_aplicacao'] == 'LINEAR':
+        if f['p_linear'] != 0.0:
+            df['TAXA_CONCEDIDA'] = f['p_linear']
             
-    mask_outros = ~df['TIPO_DESPESA_FINAL'].isin(taxas_conhecidas.keys())
-    if f['p_outros'] != 0.0:
-        df.loc[mask_outros, 'TAXA_CONCEDIDA'] = f['p_outros']
+    # MODO POR TIPO (Aplica as Exceções específicas)
+    else:
+        taxas_conhecidas = {
+            'DIETAS': f['p_dietas'], 'PERFUROCORTANTES': f['p_perfuro'], 'ANESTESISTA': f['p_anest'],
+            'MATERIAIS': f['p_mat'], 'MEDICAMENTOS': f['p_med'], 'DIARIAS': f['p_dia'],
+            'TAXAS': f['p_taxa'], 'GASES': f['p_gas'], 'OPME': f['p_opme'],
+            'SADT': f['p_sadt'], 'HONORARIOS': f['p_hon']
+        }
+
+        for grupo, taxa in taxas_conhecidas.items():
+            if taxa != 0.0:
+                df.loc[df['TIPO_DESPESA_FINAL'] == grupo, 'TAXA_CONCEDIDA'] = taxa
+                
+        mask_outros = ~df['TIPO_DESPESA_FINAL'].isin(taxas_conhecidas.keys())
+        if f['p_outros'] != 0.0:
+            df.loc[mask_outros, 'TAXA_CONCEDIDA'] = f['p_outros']
 
     # CÁLCULOS FINAIS
     df['VALOR_SOLICITADO'] = df['VALOR_BASE'] * (1 + (df['TAXA_SOLICITADA'] / 100))
@@ -625,15 +789,22 @@ def serve_logo():
 def dashboard():
     f = {
         'comp': request.args.get('comp', '').strip(),
+        'modo_aplicacao': request.args.get('modo_aplicacao', 'POR_TIPO'),
+        'ipca': float(request.args.get('ipca', '0.00') or 0.0),
+        'analista': request.args.get('analista', '').strip(),
+        'gestor': request.args.get('gestor', '').strip(),
+        
         'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(),
         'uf_alvo': request.args.get('uf_alvo', '').strip(),
         'cnpj_alvo': request.args.get('cnpj_alvo', '').strip(),
+        'busca_por': request.args.get('busca_por', 'CNPJ').strip(),
         
         'sol_dotacao': float(request.args.get('sol_dotacao', '0.00') or 0.0),
         'conc_dotacao': float(request.args.get('conc_dotacao', '0.00') or 0.0),
         'sol_faixa': float(request.args.get('sol_faixa', '0.00') or 0.0),
         'conc_faixa': float(request.args.get('conc_faixa', '0.00') or 0.0),
         
+        'p_linear': float(request.args.get('p_linear', '0.00') or 0.0),
         'p_dietas': float(request.args.get('p_dietas', '0.00') or 0.0),
         'p_perfuro': float(request.args.get('p_perfuro', '0.00') or 0.0),
         'p_anest': float(request.args.get('p_anest', '0.00') or 0.0),
@@ -711,8 +882,8 @@ def exportar():
     comp = request.args.get('comp', '').strip()
     if not comp or not engine: return redirect(url_for('dashboard'))
     
-    f = {k: float(request.args.get(k, '0.00') or 0.0) for k in ['sol_dotacao', 'conc_dotacao', 'sol_faixa', 'conc_faixa', 'p_dietas', 'p_perfuro', 'p_anest', 'p_mat', 'p_med', 'p_dia', 'p_taxa', 'p_gas', 'p_opme', 'p_sadt', 'p_hon', 'p_outros']}
-    f.update({ 'comp': comp, 'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(), 'uf_alvo': request.args.get('uf_alvo', '').strip(), 'cnpj_alvo': request.args.get('cnpj_alvo', '').strip() })
+    f = {k: float(request.args.get(k, '0.00') or 0.0) for k in ['sol_dotacao', 'conc_dotacao', 'sol_faixa', 'conc_faixa', 'p_linear', 'p_dietas', 'p_perfuro', 'p_anest', 'p_mat', 'p_med', 'p_dia', 'p_taxa', 'p_gas', 'p_opme', 'p_sadt', 'p_hon', 'p_outros']}
+    f.update({ 'comp': comp, 'modo_aplicacao': request.args.get('modo_aplicacao', 'POR_TIPO'), 'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(), 'uf_alvo': request.args.get('uf_alvo', '').strip(), 'cnpj_alvo': request.args.get('cnpj_alvo', '').strip(), 'busca_por': request.args.get('busca_por', 'CNPJ').strip() })
     
     try:
         df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
@@ -745,8 +916,8 @@ def exportar_pdf():
     comp = request.args.get('comp', '').strip()
     if not comp or not engine: return redirect(url_for('dashboard'))
     
-    f = {k: float(request.args.get(k, '0.00') or 0.0) for k in ['sol_dotacao', 'conc_dotacao', 'sol_faixa', 'conc_faixa', 'p_dietas', 'p_perfuro', 'p_anest', 'p_mat', 'p_med', 'p_dia', 'p_taxa', 'p_gas', 'p_opme', 'p_sadt', 'p_hon', 'p_outros']}
-    f.update({ 'comp': comp, 'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(), 'uf_alvo': request.args.get('uf_alvo', '').strip(), 'cnpj_alvo': request.args.get('cnpj_alvo', '').strip() })
+    f = {k: float(request.args.get(k, '0.00') or 0.0) for k in ['ipca', 'sol_dotacao', 'conc_dotacao', 'sol_faixa', 'conc_faixa', 'p_linear', 'p_dietas', 'p_perfuro', 'p_anest', 'p_mat', 'p_med', 'p_dia', 'p_taxa', 'p_gas', 'p_opme', 'p_sadt', 'p_hon', 'p_outros']}
+    f.update({ 'comp': comp, 'modo_aplicacao': request.args.get('modo_aplicacao', 'POR_TIPO'), 'analista': request.args.get('analista', 'Analista'), 'gestor': request.args.get('gestor', 'Gestor'), 'tipo_neg': request.args.get('tipo_neg', 'TODOS').strip(), 'uf_alvo': request.args.get('uf_alvo', '').strip(), 'cnpj_alvo': request.args.get('cnpj_alvo', '').strip(), 'busca_por': request.args.get('busca_por', 'CNPJ').strip() })
     
     try:
         df_fat = pd.read_sql(text(f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" = '{f['comp']}'"), con=engine)
@@ -786,6 +957,12 @@ def exportar_pdf():
             'comp': f['comp'],
             'uf_alvo': f['uf_alvo'],
             'cnpj_alvo': f['cnpj_alvo'],
+            'busca_por': f['busca_por'],
+            'modo_aplicacao': f['modo_aplicacao'],
+            'ipca': f['ipca'],
+            'tipo_neg': f['tipo_neg'],
+            'analista': f['analista'],
+            'gestor': f['gestor'],
             'by_type': by_type,
             'totals': {
                 'total_faturamento': float(df_final['VALOR_BASE'].sum()),
