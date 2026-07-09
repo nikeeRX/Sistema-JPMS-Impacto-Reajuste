@@ -648,9 +648,13 @@ def admin():
     if engine:
         try:
             with engine.connect() as conn:
-                res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
-                for row in res:
-                    comps_fat.append({'comp': row[0], 'linhas': row[1]})
+                # Modificado para evitar erro se a coluna ainda não existir
+                try:
+                    res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
+                    for row in res:
+                        comps_fat.append({'comp': row[0], 'linhas': row[1]})
+                except:
+                    pass
         except:
             pass
             
@@ -722,7 +726,6 @@ def admin_upload():
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
-            # --- AUTO NOMEAÇÃO DA COMPETÊNCIA PELO ARQUIVO ---
             if tipo_base == 'faturamento':
                 comp_final = competencia if competencia else nome_arquivo_puro
                 df['COMPETENCIA'] = str(comp_final).strip()
@@ -735,6 +738,14 @@ def admin_upload():
 
             with engine.begin() as conn:
                 if tipo_base == 'faturamento':
+                    
+                    # --- A VACINA: INJEÇÃO AUTOMÁTICA DA COLUNA NO BANCO ---
+                    try:
+                        conn.execute(text('ALTER TABLE faturamento ADD COLUMN IF NOT EXISTS "COMPETENCIA" TEXT;'))
+                    except:
+                        pass # Ignora silenciosamente se a tabela faturamento ainda não existir de jeito nenhum (será criada abaixo)
+                    # --------------------------------------------------------
+
                     df.to_sql('faturamento', con=conn, if_exists='append', index=False, chunksize=200000)
                 else:
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
