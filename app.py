@@ -421,7 +421,7 @@ HTML_ADMIN = CSS_PADRAO + """
                 if (percent < 100) {
                     document.getElementById('progress-text').innerText = 'Enviando arquivos pela rede: ' + percent + '%';
                 } else {
-                    document.getElementById('progress-text').innerText = 'Upload 100% concluído! O Banco de Dados está processando as linhas agora (Isso leva alguns minutos, não feche a página)...';
+                    document.getElementById('progress-text').innerText = 'Upload 100% concluído! O Banco de Dados está processando em lotes de 200.000 (Aguarde alguns minutos)...';
                     document.getElementById('progress-bar').style.backgroundColor = 'var(--amarelo-postal)';
                 }
             }
@@ -434,7 +434,7 @@ HTML_ADMIN = CSS_PADRAO + """
                 document.write(xhr.responseText); // Recarrega o site com a mensagem verde de sucesso
                 document.close();
             } else {
-                alert('Erro na resposta do servidor. O arquivo pode ser muito grande ou a internet oscilou.');
+                alert('Erro na resposta do servidor. A internet oscilou ou houve falha no processamento.');
                 window.location.reload();
             }
         };
@@ -692,12 +692,14 @@ def admin_upload():
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
+            # AQUI ESTÁ A INJEÇÃO DE PERFORMANCE! O CHUNKSIZE SALVADOR!
             with engine.begin() as conn:
                 if tipo_base == 'faturamento':
                     if competencia: df['COMPETENCIA'] = competencia
-                    df.to_sql('faturamento', con=conn, if_exists='append', index=False)
+                    df.to_sql('faturamento', con=conn, if_exists='append', index=False, chunksize=200000)
                 else:
-                    df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False)
+                    df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
+            
             linhas += len(df)
             primeiro = False
             
