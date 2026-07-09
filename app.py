@@ -75,9 +75,24 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre, is_regional=Fal
             return set(rdf[c or rdf.columns[0]].fillna("").astype(str).apply(normalize_id_digits).unique())
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
-        t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA"])
-        df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper() if t_col else "OUTROS"
         
+        # --- NOVO MOTOR DE PADRONIZAÇÃO DE TIPOS DE DESPESA TISS/TUSS ---
+        t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
+        if t_col:
+            df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
+            # Mapeamento Inteligente
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIARIAS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("TAXA", na=False), "TIPO_DESPESA_FINAL"] = "TAXAS"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("GASES", na=False), "TIPO_DESPESA_FINAL"] = "GASES"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("OPME|ORTESE|PROTESE", na=False), "TIPO_DESPESA_FINAL"] = "OPME"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("SADT|EXAME|DIAGNOSTICO|IMAGEM", na=False), "TIPO_DESPESA_FINAL"] = "SADT"
+            df.loc[df["TIPO_DESPESA_FINAL"].str.contains("HONORARIO|CONSULTA|VISITA|MEDICO", na=False), "TIPO_DESPESA_FINAL"] = "HONORARIOS"
+        else:
+            df["TIPO_DESPESA_FINAL"] = "OUTROS"
+        
+        # Sobrescritas Específicas
         if grau_col:
             mask_anestesista = df[grau_col].fillna("").astype(str).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
             df.loc[mask_anestesista, "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
@@ -154,7 +169,6 @@ CSS_PADRAO = """
     .alert-success { background: #e6f4ea; color: var(--verde-ok); border: 1px solid var(--verde-ok); }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
     
-    /* ESTILOS DA BARRA DE PROGRESSO */
     .progress-wrapper { background: #eef2f5; border-radius: 4px; overflow: hidden; height: 25px; margin-top: 20px; border: 1px solid #ccc; display: none; }
     .progress-bar { background: var(--verde-ok); height: 100%; width: 0%; transition: width 0.3s ease, background-color 0.5s ease; }
     .progress-text { margin-top: 8px; font-size: 0.95em; color: var(--azul-postal); font-weight: bold; display: none; text-align: center; }
@@ -203,24 +217,24 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
-            <h4 style="margin: 15px 0 5px 0; color: var(--azul-claro);">Definição das Propostas de Percentuais (%)</h4>
+            <hr style="border:0; border-top:1px solid #ccc; margin: 20px 0;">
+            <h4 style="margin: 0 0 15px 0; color: var(--azul-claro);">Definição das Propostas por Tipo de Despesa (%)</h4>
+            
             <div class="grid-4">
-                <div class="form-group">
-                    <label>Dietas (% Reajuste):</label>
-                    <input type="number" step="0.01" name="p_dietas" class="form-control" value="{{ filtros.p_dietas }}">
-                </div>
-                <div class="form-group">
-                    <label>Perfurocortantes (% Reajuste):</label>
-                    <input type="number" step="0.01" name="p_perfuro" class="form-control" value="{{ filtros.p_perfuro }}">
-                </div>
-                <div class="form-group">
-                    <label>Anestesista (% Reajuste):</label>
-                    <input type="number" step="0.01" name="p_anest" class="form-control" value="{{ filtros.p_anest }}">
-                </div>
-                <div class="form-group">
-                    <label>Outros / Geral (% Reajuste):</label>
-                    <input type="number" step="0.01" name="p_outros" class="form-control" value="{{ filtros.p_outros }}">
-                </div>
+                <div class="form-group"><label>Dietas (%):</label><input type="number" step="0.01" name="p_dietas" class="form-control" value="{{ filtros.p_dietas }}"></div>
+                <div class="form-group"><label>Perfurocortantes (%):</label><input type="number" step="0.01" name="p_perfuro" class="form-control" value="{{ filtros.p_perfuro }}"></div>
+                <div class="form-group"><label>Anestesista (%):</label><input type="number" step="0.01" name="p_anest" class="form-control" value="{{ filtros.p_anest }}"></div>
+                <div class="form-group"><label>Materiais (%):</label><input type="number" step="0.01" name="p_mat" class="form-control" value="{{ filtros.p_mat }}"></div>
+                
+                <div class="form-group"><label>Medicamentos (%):</label><input type="number" step="0.01" name="p_med" class="form-control" value="{{ filtros.p_med }}"></div>
+                <div class="form-group"><label>Diárias (%):</label><input type="number" step="0.01" name="p_dia" class="form-control" value="{{ filtros.p_dia }}"></div>
+                <div class="form-group"><label>Taxas (%):</label><input type="number" step="0.01" name="p_taxa" class="form-control" value="{{ filtros.p_taxa }}"></div>
+                <div class="form-group"><label>Gases (%):</label><input type="number" step="0.01" name="p_gas" class="form-control" value="{{ filtros.p_gas }}"></div>
+                
+                <div class="form-group"><label>OPME (%):</label><input type="number" step="0.01" name="p_opme" class="form-control" value="{{ filtros.p_opme }}"></div>
+                <div class="form-group"><label>SADT / Exames (%):</label><input type="number" step="0.01" name="p_sadt" class="form-control" value="{{ filtros.p_sadt }}"></div>
+                <div class="form-group"><label>Honorários (%):</label><input type="number" step="0.01" name="p_hon" class="form-control" value="{{ filtros.p_hon }}"></div>
+                <div class="form-group"><label style="color:var(--amarelo-postal);">Outros / Geral (%):</label><input type="number" step="0.01" name="p_outros" class="form-control" value="{{ filtros.p_outros }}"></div>
             </div>
             
             <div style="text-align: right; margin-top: 10px;">
@@ -233,7 +247,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <div style="display: flex; justify-content: space-between; align-items: center;">
             <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado da Proposta</h3>
             {% if tem_dados %}
-            <a href="/exportar?comp={{ filtros.comp }}&tipo_neg={{ filtros.tipo_neg }}&uf_alvo={{ filtros.uf_alvo }}&cnpj_alvo={{ filtros.cnpj_alvo }}&p_dietas={{ filtros.p_dietas }}&p_perfuro={{ filtros.p_perfuro }}&p_anest={{ filtros.p_anest }}&p_outros={{ filtros.p_outros }}" class="btn btn-success">📥 Baixar Planilha Final Cruzada (Excel)</a>
+            <a href="/exportar?comp={{ filtros.comp }}&tipo_neg={{ filtros.tipo_neg }}&uf_alvo={{ filtros.uf_alvo }}&cnpj_alvo={{ filtros.cnpj_alvo }}&p_dietas={{ filtros.p_dietas }}&p_perfuro={{ filtros.p_perfuro }}&p_anest={{ filtros.p_anest }}&p_mat={{ filtros.p_mat }}&p_med={{ filtros.p_med }}&p_dia={{ filtros.p_dia }}&p_taxa={{ filtros.p_taxa }}&p_gas={{ filtros.p_gas }}&p_opme={{ filtros.p_opme }}&p_sadt={{ filtros.p_sadt }}&p_hon={{ filtros.p_hon }}&p_outros={{ filtros.p_outros }}" class="btn btn-success">📥 Baixar Planilha Final (Excel)</a>
             {% endif %}
         </div>
         
@@ -266,7 +280,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <table>
             <thead>
                 <tr>
-                    <th>Grupo de Despesa Final</th>
+                    <th>Grupo de Despesa Real</th>
                     <th>Origem da Regra</th>
                     <th>Qtd Itens</th>
                     <th>Valor Solicitado (R$)</th>
@@ -284,7 +298,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </tr>
                 {% else %}
                 <tr>
-                    <td colspan="5" style="text-align: center; color: #888; padding: 30px;">Aguardando filtros. Digite a competência acima e execute o processamento das colunas.</td>
+                    <td colspan="5" style="text-align: center; color: #888; padding: 30px;">Aguardando filtros. Digite a competência acima e execute o processamento.</td>
                 </tr>
                 {% endfor %}
             </tbody>
@@ -400,19 +414,17 @@ HTML_ADMIN = CSS_PADRAO + """
 <script>
     const form = document.getElementById('upload-form');
     form.addEventListener('submit', function(e) {
-        e.preventDefault(); // Impede o site de recarregar a tela em branco
+        e.preventDefault();
         const formData = new FormData(form);
         const xhr = new XMLHttpRequest();
         
-        // Liga o visual da barra
         document.getElementById('progress-wrapper').style.display = 'block';
         document.getElementById('progress-text').style.display = 'block';
         const btn = document.getElementById('upload-btn');
-        btn.disabled = true; // Trava o botão pra não clicar duas vezes
+        btn.disabled = true;
         btn.innerText = 'Transmissão em andamento...';
         btn.style.backgroundColor = '#999';
 
-        // Escuta o progresso da rede em tempo real
         xhr.upload.addEventListener('progress', function(e) {
             if (e.lengthComputable) {
                 const percent = Math.round((e.loaded / e.total) * 100);
@@ -427,11 +439,10 @@ HTML_ADMIN = CSS_PADRAO + """
             }
         });
 
-        // Quando o banco de dados finalmente responder
         xhr.onload = function() {
             if (xhr.status === 200) {
                 document.open();
-                document.write(xhr.responseText); // Recarrega o site com a mensagem verde de sucesso
+                document.write(xhr.responseText);
                 document.close();
             } else {
                 alert('Erro na resposta do servidor. A internet oscilou ou houve falha no processamento.');
@@ -471,11 +482,31 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     df['VALOR_SOLICITADO'] = pd.to_numeric(df[v_col], errors='coerce').fillna(0)
     df['VALOR_CONCEDIDO'] = df['VALOR_SOLICITADO'].copy()
 
-    # Aplicação cirúrgica dos percentuais digitados por grupo
-    df.loc[df['TIPO_DESPESA_FINAL'] == 'DIETAS', 'VALOR_CONCEDIDO'] *= (1 + (f['p_dietas'] / 100))
-    df.loc[df['TIPO_DESPESA_FINAL'] == 'PERFUROCORTANTES', 'VALOR_CONCEDIDO'] *= (1 + (f['p_perfuro'] / 100))
-    df.loc[df['TIPO_DESPESA_FINAL'] == 'ANESTESISTA', 'VALOR_CONCEDIDO'] *= (1 + (f['p_anest'] / 100))
-    df.loc[df['TIPO_DESPESA_FINAL'] == 'OUTROS', 'VALOR_CONCEDIDO'] *= (1 + (f['p_outros'] / 100))
+    # DICIONÁRIO DE TAXAS CONHECIDAS (Para aplicação cirúrgica)
+    taxas_conhecidas = {
+        'DIETAS': f['p_dietas'],
+        'PERFUROCORTANTES': f['p_perfuro'],
+        'ANESTESISTA': f['p_anest'],
+        'MATERIAIS': f['p_mat'],
+        'MEDICAMENTOS': f['p_med'],
+        'DIARIAS': f['p_dia'],
+        'TAXAS': f['p_taxa'],
+        'GASES': f['p_gas'],
+        'OPME': f['p_opme'],
+        'SADT': f['p_sadt'],
+        'HONORARIOS': f['p_hon']
+    }
+
+    # Aplica as taxas se for um grupo mapeado
+    for grupo, taxa in taxas_conhecidas.items():
+        if taxa != 0.0:
+            mask = df['TIPO_DESPESA_FINAL'] == grupo
+            df.loc[mask, 'VALOR_CONCEDIDO'] *= (1 + (taxa / 100))
+            
+    # O que sobrar (grupos esquisitos ou genéricos) recebe a taxa "Outros"
+    mask_outros = ~df['TIPO_DESPESA_FINAL'].isin(taxas_conhecidas.keys())
+    if f['p_outros'] != 0.0:
+        df.loc[mask_outros, 'VALOR_CONCEDIDO'] *= (1 + (f['p_outros'] / 100))
 
     df['CUSTO_EVITADO'] = df['VALOR_SOLICITADO'] - df['VALOR_CONCEDIDO']
     return df
@@ -498,6 +529,14 @@ def dashboard():
         'p_dietas': float(request.args.get('p_dietas', '0.00') or 0.0),
         'p_perfuro': float(request.args.get('p_perfuro', '0.00') or 0.0),
         'p_anest': float(request.args.get('p_anest', '0.00') or 0.0),
+        'p_mat': float(request.args.get('p_mat', '0.00') or 0.0),
+        'p_med': float(request.args.get('p_med', '0.00') or 0.0),
+        'p_dia': float(request.args.get('p_dia', '0.00') or 0.0),
+        'p_taxa': float(request.args.get('p_taxa', '0.00') or 0.0),
+        'p_gas': float(request.args.get('p_gas', '0.00') or 0.0),
+        'p_opme': float(request.args.get('p_opme', '0.00') or 0.0),
+        'p_sadt': float(request.args.get('p_sadt', '0.00') or 0.0),
+        'p_hon': float(request.args.get('p_hon', '0.00') or 0.0),
         'p_outros': float(request.args.get('p_outros', '0.00') or 0.0)
     }
 
@@ -565,6 +604,14 @@ def exportar():
         'p_dietas': float(request.args.get('p_dietas', '0.00')),
         'p_perfuro': float(request.args.get('p_perfuro', '0.00')),
         'p_anest': float(request.args.get('p_anest', '0.00')),
+        'p_mat': float(request.args.get('p_mat', '0.00')),
+        'p_med': float(request.args.get('p_med', '0.00')),
+        'p_dia': float(request.args.get('p_dia', '0.00')),
+        'p_taxa': float(request.args.get('p_taxa', '0.00')),
+        'p_gas': float(request.args.get('p_gas', '0.00')),
+        'p_opme': float(request.args.get('p_opme', '0.00')),
+        'p_sadt': float(request.args.get('p_sadt', '0.00')),
+        'p_hon': float(request.args.get('p_hon', '0.00')),
         'p_outros': float(request.args.get('p_outros', '0.00'))
     }
     
@@ -656,20 +703,13 @@ def admin_upload():
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
-                
-                # --- A MÁGICA DO FAREJADOR DE DELIMITADORES TURBINADA ---
                 amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
                 
-                if '¬' in amostra:
-                    delimitador = '¬'
-                elif ';' in amostra:
-                    delimitador = ';'
-                elif '\t' in amostra:
-                    delimitador = '\t'
-                else:
-                    delimitador = None
-                # --------------------------------------------------------
+                if '¬' in amostra: delimitador = '¬'
+                elif ';' in amostra: delimitador = ';'
+                elif '\t' in amostra: delimitador = '\t'
+                else: delimitador = None
                 
                 try: 
                     df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='utf-8', on_bad_lines='skip')
@@ -686,16 +726,18 @@ def admin_upload():
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = None
             
+            # --- PROTEÇÃO CONTRA A FALTA DE COMPETÊNCIA ---
+            if tipo_base == 'faturamento':
+                df['COMPETENCIA'] = competencia if competencia else 'SEM_COMPETENCIA'
+
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
                 df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
                 tot = df['VLR_DESCONTO_OBTIDO'].sum()
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
-            # AQUI ESTÁ A INJEÇÃO DE PERFORMANCE! O CHUNKSIZE SALVADOR!
             with engine.begin() as conn:
                 if tipo_base == 'faturamento':
-                    if competencia: df['COMPETENCIA'] = competencia
                     df.to_sql('faturamento', con=conn, if_exists='append', index=False, chunksize=200000)
                 else:
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
