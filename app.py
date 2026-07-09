@@ -478,7 +478,6 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
-<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
@@ -528,11 +527,9 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </div>
         
         <div style="flex-grow: 1;"></div>
-        <!-- FASE 1: Carregar os Dados -->
         <button type="submit" name="step" value="1" class="btn" style="background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px;">Carregar e Cruzar Bases</button>
     </div>
 
-    <!-- MAIN CONTENT (ÁREA PRINCIPAL) -->
     <div class="main-content">
         <div class="header">
             <h2>Sistema de reajuste de discussão</h2>
@@ -542,7 +539,6 @@ HTML_DASHBOARD = CSS_PADRAO + """
         <div class="container">
             {% with messages = get_flashed_messages(category_filter=["error"]) %}{% if messages %}{% for m in messages %}<div class="alert alert-danger">{{ m }}</div>{% endfor %}{% endif %}{% endwith %}
 
-            <!-- FILTRO DE NEGOCIAÇÃO -->
             <div class="card" style="border-top: none;">
                 <div class="form-group" style="max-width: 400px;">
                     <label style="font-size: 1em; color: var(--azul-postal);">Filtrar por NEGOCIAÇÃO</label>
@@ -576,110 +572,124 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </div>
             </div>
 
-            <!-- FASE 2: Mostrar as Abas para Digitar as Taxas -->
             {% if step == '1' or step == '2' %}
-            <div class="card" id="div_por_tipo">
-                <h3 style="margin-top:0; color: var(--azul-postal); margin-bottom: 20px;">Definição de Propostas por Origem</h3>
-                <div class="tabs">
-                    <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação</button>
-                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-faixa')">Faixa de Evento</button>
-                    <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
-                </div>
+                {% if tem_dados %}
+                    <div class="card" style="background-color: var(--azul-postal); color: white; border: none; box-shadow: 0 4px 10px rgba(0,0,0,0.15);">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <div>
+                                <h3 style="margin: 0; color: var(--amarelo-postal);">Validação da Base Carregada</h3>
+                                <p style="margin: 5px 0 0 0; font-size: 0.9em; color: #d4e3ef;">Confira se o faturamento total bate com o esperado antes de aplicar as taxas.</p>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 0.9em; color: #d4e3ef;">Faturamento Total Localizado (R$)</div>
+                                <div style="font-size: 2em; font-weight: bold; color: white;">R$ {{ totais.faturamento_total }}</div>
+                                <div style="font-size: 0.85em; color: var(--amarelo-postal);">{{ totais.linhas_faturamento }} linhas vinculadas a este filtro</div>
+                            </div>
+                        </div>
+                    </div>
 
-                <!-- ABA 1: DOTAÇÃO -->
-                <div id="tab-dotacao" class="tab-content active">
-                    <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
-                    {% for label, key in tipos_despesa %}
-                    <div class="expense-row">
-                        <div class="expense-label">
-                            {{ label }} 
-                            {% if bases_dict and bases_dict.get('Dotação', {}).get(label, 0) > 0 %}
-                                <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Dotação'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
-                            {% else %}
-                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
-                            {% endif %}
+                    <div class="card" id="div_por_tipo">
+                        <h3 style="margin-top:0; color: var(--azul-postal); margin-bottom: 20px;">Definição de Propostas por Origem</h3>
+                        <div class="tabs">
+                            <button type="button" class="tab-link active" onclick="openTab(event, 'tab-dotacao')">Dotação</button>
+                            <button type="button" class="tab-link" onclick="openTab(event, 'tab-faixa')">Faixa de Evento</button>
+                            <button type="button" class="tab-link" onclick="openTab(event, 'tab-especificos')">Itens Específicos</button>
                         </div>
-                        <div class="expense-inputs">
-                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_dot_{{ key }}" value="{{ filtros['sol_dot_'~key] }}"></div>
-                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_dot_{{ key }}" value="{{ filtros['conc_dot_'~key] }}"></div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
 
-                <!-- ABA 2: FAIXA DE EVENTO -->
-                <div id="tab-faixa" class="tab-content">
-                    <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
-                    {% for label, key in tipos_despesa %}
-                    <div class="expense-row">
-                        <div class="expense-label">
-                            {{ label }} 
-                            {% if bases_dict and bases_dict.get('Faixa de Eventos', {}).get(label, 0) > 0 %}
-                                <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Faixa de Eventos'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
-                            {% else %}
-                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
-                            {% endif %}
+                        <div id="tab-dotacao" class="tab-content active">
+                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados na base de <strong>Dotação</strong>.</p>
+                            {% for label, key in tipos_despesa %}
+                            <div class="expense-row">
+                                <div class="expense-label">
+                                    {{ label }} 
+                                    {% if bases_dict and bases_dict.get('Dotação', {}).get(label, 0) > 0 %}
+                                        <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Dotação'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                                    {% else %}
+                                        <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                                    {% endif %}
+                                </div>
+                                <div class="expense-inputs">
+                                    <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_dot_{{ key }}" value="{{ filtros['sol_dot_'~key] }}"></div>
+                                    <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_dot_{{ key }}" value="{{ filtros['conc_dot_'~key] }}"></div>
+                                </div>
+                            </div>
+                            {% endfor %}
                         </div>
-                        <div class="expense-inputs">
-                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_fai_{{ key }}" value="{{ filtros['sol_fai_'~key] }}"></div>
-                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_fai_{{ key }}" value="{{ filtros['conc_fai_'~key] }}"></div>
-                        </div>
-                    </div>
-                    {% endfor %}
-                </div>
 
-                <!-- ABA 3: ITENS ESPECÍFICOS -->
-                <div id="tab-especificos" class="tab-content">
-                    <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral.</p>
-                    <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
-                        <div class="expense-label" style="color:#856404;">
-                            TODOS OS CÓDIGOS ESPECÍFICOS EXTRAÍDOS
-                            {% if bases_dict and bases_dict.get('Item Específico', {}).get('TOTAL', 0) > 0 %}
-                                <span class="expense-value" style="color:#856404;">— R$ {{ "{:,.2f}".format(bases_dict['Item Específico']['TOTAL']).replace(',','X').replace('.',',').replace('X','.') }}</span>
-                            {% else %}
-                                <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
-                            {% endif %}
+                        <div id="tab-faixa" class="tab-content">
+                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
+                            {% for label, key in tipos_despesa %}
+                            <div class="expense-row">
+                                <div class="expense-label">
+                                    {{ label }} 
+                                    {% if bases_dict and bases_dict.get('Faixa de Eventos', {}).get(label, 0) > 0 %}
+                                        <span class="expense-value">— R$ {{ "{:,.2f}".format(bases_dict['Faixa de Eventos'][label]).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                                    {% else %}
+                                        <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                                    {% endif %}
+                                </div>
+                                <div class="expense-inputs">
+                                    <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_fai_{{ key }}" value="{{ filtros['sol_fai_'~key] }}"></div>
+                                    <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_fai_{{ key }}" value="{{ filtros['conc_fai_'~key] }}"></div>
+                                </div>
+                            </div>
+                            {% endfor %}
                         </div>
-                        <div class="expense-inputs">
-                            <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_exc" value="{{ filtros['sol_exc'] }}"></div>
-                            <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_exc" value="{{ filtros['conc_exc'] }}"></div>
+
+                        <div id="tab-especificos" class="tab-content">
+                            <p style="color:#cc0000; font-size:0.9em; font-weight:bold;">Itens extraídos a partir dos códigos informados na barra lateral.</p>
+                            <div class="expense-row" style="background: #fff3cd; border: 1px solid #ffeeba;">
+                                <div class="expense-label" style="color:#856404;">
+                                    TODOS OS CÓDIGOS ESPECÍFICOS EXTRAÍDOS
+                                    {% if bases_dict and bases_dict.get('Item Específico', {}).get('TOTAL', 0) > 0 %}
+                                        <span class="expense-value" style="color:#856404;">— R$ {{ "{:,.2f}".format(bases_dict['Item Específico']['TOTAL']).replace(',','X').replace('.',',').replace('X','.') }}</span>
+                                    {% else %}
+                                        <span class="expense-value" style="color:#ccc;">— R$ 0,00</span>
+                                    {% endif %}
+                                </div>
+                                <div class="expense-inputs">
+                                    <div class="input-wrapper"><label>% Sol.</label><input type="number" step="0.01" name="sol_exc" value="{{ filtros['sol_exc'] }}"></div>
+                                    <div class="input-wrapper"><label>% Conc.</label><input type="number" step="0.01" name="conc_exc" value="{{ filtros['conc_exc'] }}"></div>
+                                </div>
+                            </div>
                         </div>
                     </div>
-                </div>
-            </div>
-            
-            <div id="div_linear" style="display:none; background:#fde8e8; padding:20px; border-radius:8px; border:1px solid var(--vermelho-alerta); margin-bottom:20px;">
-                <h3 style="margin: 0 0 5px 0; color: var(--vermelho-alerta);">Modo Linear Ativado</h3>
-                <p style="font-size:0.9em; color:#666; margin-bottom:15px;">A mesma taxa será aplicada a todas as linhas do faturamento.</p>
-                <div style="display:flex; gap:20px;">
-                    <div class="form-group" style="max-width: 150px;">
-                        <label>Linear Solicitado (%):</label>
-                        <input type="number" step="0.01" name="sol_linear" class="form-control" value="{{ filtros.sol_linear }}">
+                    
+                    <div id="div_linear" style="display:none; background:#fde8e8; padding:20px; border-radius:8px; border:1px solid var(--vermelho-alerta); margin-bottom:20px;">
+                        <h3 style="margin: 0 0 5px 0; color: var(--vermelho-alerta);">Modo Linear Ativado</h3>
+                        <p style="font-size:0.9em; color:#666; margin-bottom:15px;">A mesma taxa será aplicada a todas as linhas do faturamento.</p>
+                        <div style="display:flex; gap:20px;">
+                            <div class="form-group" style="max-width: 150px;">
+                                <label>Linear Solicitado (%):</label>
+                                <input type="number" step="0.01" name="sol_linear" class="form-control" value="{{ filtros.sol_linear }}">
+                            </div>
+                            <div class="form-group" style="max-width: 150px;">
+                                <label>Linear Concedido (%):</label>
+                                <input type="number" step="0.01" name="conc_linear" class="form-control" value="{{ filtros.conc_linear }}">
+                            </div>
+                        </div>
                     </div>
-                    <div class="form-group" style="max-width: 150px;">
-                        <label>Linear Concedido (%):</label>
-                        <input type="number" step="0.01" name="conc_linear" class="form-control" value="{{ filtros.conc_linear }}">
+                    
+                    <div style="text-align: right; margin-bottom: 20px;">
+                        <button type="submit" name="step" value="2" class="btn btn-success" style="width: auto; padding: 15px 40px; font-size: 1.1em;">CALCULAR ANÁLISE DE IMPACTO</button>
                     </div>
-                </div>
-            </div>
-            
-            <!-- FASE 3: Botão de Calcular Final -->
-            <div style="text-align: right; margin-bottom: 20px;">
-                <button type="submit" name="step" value="2" class="btn btn-success" style="width: auto; padding: 15px 40px; font-size: 1.1em;">CALCULAR ANÁLISE DE IMPACTO</button>
-            </div>
+                {% else %}
+                    <div class="alert alert-danger" style="background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;">
+                        <strong style="font-size: 1.1em;">⚠️ Atenção: Nenhum faturamento localizado!</strong><br><br>
+                        O sistema não encontrou valores para os filtros selecionados. 
+                        Verifique se o CNPJ, UF ou a Competência estão corretos e tente cruzar as bases novamente.
+                    </div>
+                {% endif %}
             {% endif %}
 
-            <!-- RESULTADOS (Só aparecem após clicar no botão verde de Calcular) -->
-            {% if step == '2' %}
+            {% if step == '2' and tem_dados %}
             <div class="card">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <h3 style="margin:0; color: var(--azul-postal);">Resumo Financeiro Consolidado</h3>
-                    {% if tem_dados %}
                     <div>
                         <a href="/exportar?{{ query_string }}" class="btn btn-success">📥 Excel</a>
                         <a href="/exportar_pdf?{{ query_string }}" class="btn btn-pdf" target="_blank">📄 PDF</a>
                     </div>
-                    {% endif %}
                 </div>
                 
                 <div class="grid-4" style="margin-top: 15px;">
@@ -1013,6 +1023,7 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
+                # Pula os fantasmas na tela principal
                 comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip() not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
         except: pass
     
@@ -1251,7 +1262,6 @@ def admin_upload():
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
-            # VACINA ISOLADA: Verifica se a tabela existe antes de alterar para evitar o erro de transação
             if tipo_base == 'faturamento':
                 try:
                     insp = inspect(engine)
