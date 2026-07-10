@@ -126,7 +126,6 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
     
     df_list = []
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
-        # Prepara a base do chunk
         target_cols_cnpj = ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CPF", "EXEC", "CGC"]
         chunk['CNPJ_LIMPO'] = get_clean_col(chunk, target_cols_cnpj).str.replace(r'\D', '', regex=True).str.lstrip('0')
         
@@ -135,20 +134,16 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
 
         chunk["UF_FILTRO"] = get_clean_col(chunk, ["UF", "ESTADO", "FILIAL"]).str.upper()
 
-        # Filtro Regional
         if f['tipo_neg'] in ['ESTADO', 'MISTO'] and f['uf_alvo']:
             chunk = chunk[chunk['UF_FILTRO'].str.contains(str(f['uf_alvo']).strip().upper(), na=False)]
 
-        # Filtro por CNPJ / Grupo
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             mask_alvo = pd.Series(False, index=chunk.index)
             
-            # Busca Direta no Faturamento
             mask_alvo = mask_alvo | chunk['NOME_FILTRO'].str.contains(nome_alvo, regex=False)
             if cnpj_formatado:
                 mask_alvo = mask_alvo | (chunk['CNPJ_LIMPO'] == cnpj_formatado) | chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, regex=False)
                     
-            # Busca pela tabela de Prestadores (Se Modo Completo estiver ativo)
             if prestadores_encontrados:
                 mask_alvo = mask_alvo | chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
             if nomes_encontrados:
@@ -171,11 +166,8 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f):
         ev_col = _find_column(df, [COL_EVENTO, "EVENTO", "COD_EVENTO", "ESTRUTURA", "CODIGO"])
         df["_COD_LIMPO_"] = get_clean_col(df, [ev_col]).apply(normalize_id_digits) if ev_col else ""
         
-        # =================================================================
-        # MODO BYPASS: RÁPIDO E DIRETO (APENAS FATURAMENTO)
-        # =================================================================
         if f.get('modo_cruzamento', 'SIMPLES') == 'SIMPLES':
-            df["ORIGEM_INICIAL"] = "Faixa de Eventos" # Joga tudo para a aba Faixa para simplificar
+            df["ORIGEM_INICIAL"] = "Faixa de Eventos"
             
             t_col = _find_column(df, ["TIPODESPESA", "TIPO_DESPESA", "TIPO", "GRUPO", "TIPO_DESPESA_FINAL", "CATEGORIA"])
             if t_col:
@@ -197,9 +189,6 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f):
             
             return df.drop(columns=["CHAVE"], errors="ignore")
 
-        # =================================================================
-        # MODO COMPLETO: CRUZAMENTO DE TODAS AS BASES
-        # =================================================================
         ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
         df["DESCRICAO_EVENTO"] = get_clean_col(df, [ds_col]) if ds_col else ""
         
@@ -398,7 +387,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# HTML DASHBOARD INTERFACE (JPMS STYLE)
+# HTML DASHBOARD INTERFACE (JPMS STYLE) COM LOADER
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -406,7 +395,7 @@ CSS_PADRAO = """
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; display: flex; min-height: 100vh; }
     
     .sidebar { width: 300px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; overflow-y: auto;}
-    .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
+    .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; position: relative; }
     
     .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 15px; }
     .sidebar-section h4 { color: var(--azul-postal); margin: 0 0 10px 0; font-size: 1em; }
@@ -458,13 +447,23 @@ CSS_PADRAO = """
     
     .btn { background-color: var(--azul-claro); color: white; font-weight: bold; padding: 10px 20px; border: none; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; text-align: center; transition: background 0.3s; }
     .btn:hover { background-color: var(--azul-postal); }
-    .btn-action { background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px; }
-    .btn-action:hover { background-color: #e0a100; }
     .btn-success { background-color: var(--verde-ok); }
     .btn-pdf { background-color: #cc0000; margin-left: 10px; }
     .btn-danger { background-color: var(--vermelho-alerta); padding: 5px 10px; font-size: 0.85em; }
     .alert { padding: 15px; border-radius: 4px; margin-bottom: 20px; }
     .alert-danger { background: #fde8e8; color: var(--vermelho-alerta); border: 1px solid var(--vermelho-alerta); }
+    
+    /* OVERLAY DE CARREGAMENTO TELA CHEIA */
+    #loading-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 44, 82, 0.85); z-index: 9999; justify-content: center; align-items: center; flex-direction: column; }
+    .loader-box { background: white; padding: 40px; border-radius: 8px; text-align: center; color: #333; box-shadow: 0 10px 30px rgba(0,0,0,0.5); width: 450px; }
+    .loader-box h3 { color: var(--azul-postal); margin-top: 0; font-size: 1.4em; }
+    .progress-bar-container { width: 100%; background-color: #eef2f5; border-radius: 4px; overflow: hidden; margin-top: 25px; height: 20px; border: 1px solid #ddd; }
+    .progress-bar-animated { width: 0%; height: 100%; background-color: var(--amarelo-postal); animation: progress-animation 15s forwards cubic-bezier(0.1, 0.7, 1.0, 0.1); }
+    @keyframes progress-animation {
+        0% { width: 0%; } 20% { width: 35%; } 50% { width: 65%; } 80% { width: 85%; } 100% { width: 95%; }
+    }
+    .spinner { margin: 15px auto; border: 5px solid #f3f3f3; width: 50px; height: 50px; border-radius: 50%; border-left-color: var(--azul-postal); animation: spin 1s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
 </style>
 
 <script>
@@ -512,6 +511,17 @@ CSS_PADRAO = """
     window.onload = function() {
         toggleFiltros();
         toggleModo();
+        
+        // INTERCEPTADOR DE LOADING CINEMATOGRÁFICO
+        document.getElementById('mainForm').addEventListener('submit', function() {
+            document.getElementById('loading-overlay').style.display = 'flex';
+            
+            // Troca os textos para dar sensação de progresso real na máquina
+            setTimeout(() => { document.getElementById('loading-text').innerText = "Lendo tabelas e higienizando CNPJs..."; }, 2500);
+            setTimeout(() => { document.getElementById('loading-text').innerText = "Extraindo itens específicos e cruzando matrizes..."; }, 6000);
+            setTimeout(() => { document.getElementById('loading-text').innerText = "Calculando simulações de impacto financeiro..."; }, 9500);
+            setTimeout(() => { document.getElementById('loading-text').innerText = "Consolidando resumo final. Quase lá!"; }, 13000);
+        });
     };
 </script>
 """
@@ -672,7 +682,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         </div>
 
                         <div id="tab-faixa" class="tab-content">
-                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
+                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong> (Lógica Reversa).</p>
                             {% for label, key in tipos_despesa %}
                             <div class="expense-row">
                                 <div class="expense-label">
@@ -754,12 +764,12 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         <div class="sub">{{ totais.linhas_faturamento }} linhas</div>
                     </div>
                     <div class="metric-box">
-                        <h4>Reajuste Solicitado</h4>
+                        <h4>Valor Reajuste Solicitado</h4>
                         <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_solicitado }}</div>
                         <div class="sub">Impacto Financeiro (Sol.)</div>
                     </div>
                     <div class="metric-box">
-                        <h4>Reajuste Concedido</h4>
+                        <h4>Valor Reajuste Concedido</h4>
                         <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
                         <div class="sub">Impacto Financeiro (Conc.)</div>
                     </div>
@@ -807,6 +817,18 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 </table>
             </div>
             {% endif %}
+        </div>
+
+        <!-- OVERLAY DE CARREGAMENTO CINEMATOGRÁFICO -->
+        <div id="loading-overlay">
+            <div class="loader-box">
+                <div class="spinner"></div>
+                <h3>Processando Matrizes...</h3>
+                <p style="color: #666; font-size: 0.95em; margin-bottom: 0;" id="loading-text">Analisando o faturamento e validando credenciais. Aguarde...</p>
+                <div class="progress-bar-container">
+                    <div class="progress-bar-animated"></div>
+                </div>
+            </div>
         </div>
     </div>
 </form>
@@ -1027,7 +1049,6 @@ def aplicar_reajustes_simulados(df_cruzado, f):
             df.loc[mask_exc, 'TAXA_SOLICITADA'] = f['sol_exc']
             df.loc[mask_exc, 'TAXA_CONCEDIDA'] = f['conc_exc']
 
-    # AGORA CALCULA O DELTA: SE O PERCENTUAL FOR 0, O VALOR FICA 0,00!
     df['VALOR_SOLICITADO'] = df['VALOR_BASE'] * (df['TAXA_SOLICITADA'] / 100.0)
     df['VALOR_CONCEDIDO'] = df['VALOR_BASE'] * (df['TAXA_CONCEDIDA'] / 100.0)
     df['CUSTO_EVITADO'] = df['VALOR_SOLICITADO'] - df['VALOR_CONCEDIDO']
