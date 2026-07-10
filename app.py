@@ -47,7 +47,7 @@ def _find_column(df, candidates):
     return None
 
 # =====================================================================
-# PARSERS E EXTRATORES DE DADOS (VARREDURA ABSOLUTA)
+# TRATAMENTO E HIGIENIZAÇÃO DE TIPOS DE DADOS NA ENTRADA
 # =====================================================================
 def parse_financial_value(series):
     s = series.astype(str).str.strip().str.upper().str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
@@ -66,9 +66,10 @@ def parse_quantity(series):
     return pd.to_numeric(s, errors='coerce').fillna(0).astype(int)
 
 def format_dataframe_types(df):
+    """ Garante que os dados entrem no banco com a tipagem perfeita """
     for col in df.columns:
         c_upper = str(col).upper()
-        if any(x in c_upper for x in ["VALOR", "VLR", "CUSTO", "PRECO"]):
+        if any(x in c_upper for x in ["VALOR", "VLR", "CUSTO", "PRECO", "PAG", "APRES", "GLOS", "UNIT"]):
             df[col] = parse_financial_value(df[col])
         elif any(x in c_upper for x in ["QTD", "QUANTIDADE", "QUANT"]):
             df[col] = parse_quantity(df[col])
@@ -90,7 +91,7 @@ def get_clean_col(df, candidates):
             res.loc[mask] = temp.loc[mask]
     return res
 
-# --- FAREJADOR BLINDADO (Caça CNPJ e Nomes em todas as colunas possíveis) ---
+# --- FAREJADOR AUTOMÁTICO EM LOTES ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
     prestadores_encontrados = []
     nomes_encontrados = []
@@ -99,13 +100,12 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
     cnpj_formatado = re.sub(r'\D', '', cnpj_raw).lstrip('0')
     nome_alvo = cnpj_raw.upper()
 
-    # Tenta achar na base de prestadores primeiro
     try:
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
             if not df_pre_temp.empty:
                 c_cnpj = get_clean_col(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR", "CGC"])
-                df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\D', '', regex=True).str.lstrip('0')
                 c_nome = get_clean_col(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA", "NOME"])
                 df_pre_temp['NOME_LIMPO'] = c_nome.str.upper()
 
@@ -124,10 +124,8 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
-    # Busca em Lotes para não travar o servidor
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
-        
-        # Filtro de UF
+        # Filtro Regional
         if f['tipo_neg'] in ['ESTADO', 'MISTO'] and f['uf_alvo']:
             uf_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["UF", "ESTADO", "FILIAL"])]
             mask_uf = pd.Series(False, index=chunk.index)
@@ -136,7 +134,7 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 mask_uf = mask_uf | chunk[col].fillna("").astype(str).str.upper().str.contains(uf_target, regex=False)
             chunk = chunk[mask_uf]
 
-        # Filtro de CNPJ/NOME - Varredura em todas as colunas suspeitas
+        # Filtro por CNPJ / Grupo
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             target_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["PRESTADOR", "NOME", "CNPJ", "CPF", "EXEC", "CGC", "RAZAO", "FANTASIA"])]
             mask_alvo = pd.Series(False, index=chunk.index)
@@ -145,18 +143,16 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
                 s_col = chunk[col].fillna("").astype(str).str.upper()
                 mask_alvo = mask_alvo | s_col.str.contains(nome_alvo, regex=False)
                 if cnpj_formatado:
-                    s_digits = s_col.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    s_digits = s_col.str.replace(r'\D', '', regex=True).str.lstrip('0')
                     mask_alvo = mask_alvo | (s_digits == cnpj_formatado) | s_digits.str.contains(cnpj_formatado, regex=False)
                     
             if prestadores_encontrados:
                 for col in target_cols:
-                    s_col = chunk[col].fillna("").astype(str).str.upper()
-                    s_digits = s_col.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    s_digits = chunk[col].fillna("").astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
                     mask_alvo = mask_alvo | s_digits.isin(prestadores_encontrados)
             if nomes_encontrados:
                 for col in target_cols:
-                    s_col = chunk[col].fillna("").astype(str).str.upper()
-                    mask_alvo = mask_alvo | s_col.isin(nomes_encontrados)
+                    mask_alvo = mask_alvo | chunk[col].fillna("").astype(str).str.upper().isin(nomes_encontrados)
 
             chunk = chunk[mask_alvo]
 
@@ -167,7 +163,8 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
         return pd.concat(df_list, ignore_index=True)
     return pd.DataFrame()
 
-def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
+# LÓGICA REVERSA: O QUE NÃO ACHAR EM DOTAÇÃO VIRA FAIXA DE EVENTOS AUTOMATICAMENTE
+def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre):
     try:
         df = df_fat.copy()
         
@@ -200,7 +197,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
-        t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
+        t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPINICIAL", "GRUPO"])
         if t_col:
             df["TIPO_DESPESA_FINAL"] = get_clean_col(df, [t_col]).str.upper().str.strip()
             df.loc[df["TIPO_DESPESA_FINAL"] == "", "TIPO_DESPESA_FINAL"] = "OUTROS"
@@ -228,13 +225,13 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         return pd.DataFrame()
 
 # =====================================================================
-# CLASSE DO GERADOR DE PDF OFICIAL
+# CLASSE DO GERADOR DE PDF (BRANDING JPMS)
 # =====================================================================
 class ReajustePDF(FPDF):
     def header(self):
         self.set_text_color(18, 40, 63)
         self.set_font("Arial", "B", 18)
-        self.cell(0, 10, "POSTAL SAUDE", 0, 1, "L")
+        self.cell(0, 10, "JPMS ANALYTICS", 0, 1, "L")
         self.set_font("Arial", "B", 14)
         self.set_text_color(100, 100, 100)
         self.cell(0, 8, "Relatorio de Impacto de Reajuste", 0, 1, "L")
@@ -315,10 +312,8 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
 
     pdf.cell(100, 8, "Faturamento Total Lido (Base):", 0, 0)
     pdf.cell(0, 8, f"R$ {fat_total:,.2f}", 0, 1, "R")
-    
     pdf.cell(100, 8, "Total do Reajuste Solicitado:", 0, 0)
     pdf.cell(0, 8, f"R$ {sol_total:,.2f}", 0, 1, "R")
-    
     pdf.cell(100, 8, "Total do Reajuste Concedido:", 0, 0)
     pdf.cell(0, 8, f"R$ {conc_total:,.2f}", 0, 1, "R")
     
@@ -343,7 +338,7 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     return pdf.output(dest="S").encode("latin-1", errors="ignore")
 
 # =====================================================================
-# BANCO DE DADOS E CONFIGURAÇÃO FLASK
+# CONFIGURAÇÃO FLASK
 # =====================================================================
 app = Flask(__name__)
 app.secret_key = "chave_secreta_super_segura_gered"
@@ -358,7 +353,7 @@ def obter_linhas_tabela():
     mapeamento = {
         'faturamento': 'Faturamento Mensal', 'prestadores': 'Cadastro de Prestadores',
         'materiais': 'Materiais Perfurocortantes', 'dietas': 'Tabela de Dietas',
-        'dotacoes': 'Base de Dotações', 'faixas': 'Faixa de Eventos'
+        'dotacoes': 'Base de Dotações'
     }
     for t_nome, t_desc in mapeamento.items():
         if not engine:
@@ -373,7 +368,7 @@ def obter_linhas_tabela():
     return resumos
 
 # =====================================================================
-# HTML DASHBOARD 
+# HTML DASHBOARD INTERFACE (JPMS STYLE)
 # =====================================================================
 CSS_PADRAO = """
 <style>
@@ -495,7 +490,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <h2 style="color: var(--azul-postal); margin: 0 0 20px 0; border-bottom: 2px solid var(--amarelo-postal); padding-bottom: 10px;">
-            <span style="color: var(--amarelo-postal);">POSTAL</span> SAÚDE
+            <span style="color: var(--amarelo-postal);">JPMS</span> ANALYTICS
         </h2>
         
         <div class="sidebar-section">
@@ -548,8 +543,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
 
     <div class="main-content">
         <div class="header">
-            <h2 style="margin:0; color: var(--azul-postal);">Sistema de Análise e Reajuste</h2>
-            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Gerenciar Banco de Dados</a>
+            <h2>Sistema de reajuste de discussão - JPMS</h2>
+            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Administração de Banco de Dados</a>
         </div>
 
         <div class="container">
@@ -633,7 +628,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         </div>
 
                         <div id="tab-faixa" class="tab-content">
-                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
+                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong> (Lógica Reversa).</p>
                             {% for label, key in tipos_despesa %}
                             <div class="expense-row">
                                 <div class="expense-label">
@@ -692,8 +687,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
                 {% else %}
                     <div class="alert alert-danger" style="background-color: #fff3cd; color: #856404; border: 1px solid #ffeeba;">
                         <strong style="font-size: 1.1em;">⚠️ Atenção: Nenhum faturamento localizado!</strong><br><br>
-                        O sistema não encontrou valores para os filtros selecionados. 
-                        Verifique se o CNPJ, UF ou a Competência estão corretos e tente cruzar as bases novamente.
+                        O sistema JPMS não encontrou valores para os filtros selecionados. 
+                        Verifique as competências e o CNPJ digitado, e clique em cruzar bases novamente.
                     </div>
                 {% endif %}
             {% endif %}
@@ -774,14 +769,14 @@ HTML_DASHBOARD = CSS_PADRAO + """
 """
 
 # =====================================================================
-# HTML ADMIN
+# HTML ADMIN (REBRANDING COMPLETO JPMS)
 # =====================================================================
 HTML_ADMIN = """
 <!DOCTYPE html>
 <html lang="pt-br">
 <head>
     <meta charset="UTF-8">
-    <title>Administração - GERED</title>
+    <title>Administração - JPMS</title>
     <style>
         :root { --azul-postal: #002c52; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #eef2f5; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; }
@@ -807,7 +802,7 @@ HTML_ADMIN = """
 <body>
 <div class="header">
     <div style="display: flex; align-items: center; gap: 20px;">
-        <h2 style="margin:0; color: var(--azul-postal);"><span style="color: var(--amarelo-postal);">POSTAL</span> SAÚDE | Administração de BD</h2>
+        <h2 style="margin:0; color: var(--azul-postal);"><span style="color: var(--amarelo-postal);">JPMS</span> | Administração de Banco de Dados</h2>
     </div>
     <a href="/" class="btn">Voltar ao Dashboard</a>
 </div>
@@ -828,7 +823,6 @@ HTML_ADMIN = """
                         <option value="dotacoes">Base de Dotações</option>
                         <option value="materiais">Materiais Perfurocortantes</option>
                         <option value="dietas">Dietas</option>
-                        <option value="faixas">Faixa de Eventos</option>
                         <option value="prestadores">Prestadores</option>
                     </select>
                 </div>
@@ -919,9 +913,9 @@ HTML_ADMIN = """
             if (e.lengthComputable) {
                 const percent = Math.round((e.loaded / e.total) * 100);
                 document.getElementById('progress-bar').style.width = percent + '%';
-                if (percent < 100) { document.getElementById('progress-text').innerText = 'Enviando arquivos: ' + percent + '%'; } 
+                if (percent < 100) { document.getElementById('progress-text').innerText = 'Enviando e Formatando: ' + percent + '%'; } 
                 else {
-                    document.getElementById('progress-text').innerText = 'Upload 100%! O BD está processando em lotes...';
+                    document.getElementById('progress-text').innerText = 'Upload concluído! Injetando linhas tipadas no banco de dados...';
                     document.getElementById('progress-bar').style.backgroundColor = 'var(--amarelo-postal)';
                 }
             }
@@ -939,20 +933,20 @@ HTML_ADMIN = """
 """
 
 # =====================================================================
-# AUXILIARES DE CÁLCULO FINANCEIRO
+# AUXILIARES DE CÁLCULO FINANCEIRO (MÁXIMA PRECISÃO)
 # =====================================================================
 def aplicar_reajustes_simulados(df_cruzado, f):
     if df_cruzado.empty: return df_cruzado
         
     df = df_cruzado.copy()
     
-    # EXTRATOR ABSOLUTO DE VALORES FINANCEIROS
+    # PEGA AUTOMATICAMENTE A COLUNA FINANCEIRA COM MAIOR VALOR REAL (EVITA ERRO DE COLUNA VAZIA)
     df['VALOR_BASE'] = 0.0
     val_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['VALOR_PAG', 'VALOR_PAGO', 'VALORPAGOUNIT', 'VALOR_APRES', 'VALORAPRESENTADOUNIT', 'VALOR', 'VLR', 'CUSTO'])]
     
     max_sum = -1
     for vc in val_cols:
-        temp_val = parse_financial_value(df[vc])
+        temp_val = pd.to_numeric(df[vc], errors='coerce').fillna(0.0)
         temp_sum = temp_val.sum()
         if temp_sum > max_sum:
             max_sum = temp_sum
@@ -1055,12 +1049,11 @@ def dashboard():
                 except: df_die = pd.DataFrame()
                 try: df_dot = pd.read_sql(text("SELECT * FROM dotacoes"), con=engine)
                 except: df_dot = pd.DataFrame()
-                try: df_fai = pd.read_sql(text("SELECT * FROM faixas"), con=engine)
-                except: df_fai = pd.DataFrame()
                 try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
                 except: df_pre = pd.DataFrame()
 
-                df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+                # CRUZA DIRETO COM DOTAÇÃO - O QUE NÃO ACHAR VIRA FAIXA NO AUTOMÁTICO
+                df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
                 
                 f_calc = f.copy()
                 if step == '1':
@@ -1123,19 +1116,17 @@ def exportar():
         except: df_die = pd.DataFrame()
         try: df_dot = pd.read_sql(text("SELECT * FROM dotacoes"), con=engine)
         except: df_dot = pd.DataFrame()
-        try: df_fai = pd.read_sql(text("SELECT * FROM faixas"), con=engine)
-        except: df_fai = pd.DataFrame()
         try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
         except: df_pre = pd.DataFrame()
         
-        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
         df_final = aplicar_reajustes_simulados(df_cruzado, f)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_final.to_excel(writer, index=False, sheet_name="Reajuste")
         output.seek(0)
-        return send_file(output, download_name="Reajuste_Export.xlsx", as_attachment=True)
+        return send_file(output, download_name="Reajuste_Export_JPMS.xlsx", as_attachment=True)
     except Exception: return redirect(url_for('dashboard'))
 
 @app.route('/exportar_pdf')
@@ -1151,12 +1142,10 @@ def exportar_pdf():
         except: df_die = pd.DataFrame()
         try: df_dot = pd.read_sql(text("SELECT * FROM dotacoes"), con=engine)
         except: df_dot = pd.DataFrame()
-        try: df_fai = pd.read_sql(text("SELECT * FROM faixas"), con=engine)
-        except: df_fai = pd.DataFrame()
         try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
         except: df_pre = pd.DataFrame()
         
-        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre)
+        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
         df_final = aplicar_reajustes_simulados(df_cruzado, f)
         
         grupo = df_final.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM_CALCULO']).agg(
@@ -1184,7 +1173,7 @@ def exportar_pdf():
         pdf_bytes = build_analysis_pdf_bytes(data_pdf)
         response = make_response(pdf_bytes)
         response.headers.set('Content-Type', 'application/pdf')
-        response.headers.set('Content-Disposition', 'attachment; filename="Relatorio_Impacto.pdf"')
+        response.headers.set('Content-Disposition', 'attachment; filename="Relatorio_Impacto_JPMS.pdf"')
         return response
     except Exception as e:
         flash(f"Erro ao gerar PDF: {str(e)}", "error")
@@ -1201,7 +1190,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or str(c_name).strip().lower() in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']:
+                        if not c_name or str(c_name).strip() in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1229,7 +1218,7 @@ def limpar_competencia():
                     flash("Arquivos fantasmas excluídos com sucesso!", "success")
                 else:
                     conn.execute(text(f"DELETE FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"))
-                    flash(f"Competência [{comp}] excluída cirurgicamente!", "success")
+                    flash(f"Competência [{comp}] excluída!", "success")
         except Exception as e: flash(f"Erro: {str(e)}", "error")
     return redirect(url_for('admin'))
 
@@ -1251,7 +1240,6 @@ def admin_upload():
             
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
-                df = format_dataframe_types(df)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
                 amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
@@ -1260,14 +1248,15 @@ def admin_upload():
                 except: 
                     arquivo.seek(0)
                     df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='iso-8859-1', on_bad_lines='skip', dtype=str, keep_default_na=False)
-                df = format_dataframe_types(df)
             elif arquivo.filename.endswith('.xlsx'): 
                 df = pd.read_excel(arquivo, dtype=str)
-                df = format_dataframe_types(df)
             else: continue
 
             if df.empty: continue
             
+            # --- HIGIENIZAÇÃO DE TIPOS "FORÇA BRUTA" AQUI NA ENTRADA ---
+            df = format_dataframe_types(df)
+
             for col in ['UF', 'AP', 'CNPJ']:
                 if col not in df.columns: df[col] = ""
             
@@ -1280,14 +1269,14 @@ def admin_upload():
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
+            # Proteção Dinâmica de Transação Postgres
             if tipo_base == 'faturamento':
                 try:
                     insp = inspect(engine)
                     if insp.has_table('faturamento'):
                         with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as temp_conn:
                             temp_conn.execute(text('ALTER TABLE faturamento ADD COLUMN IF NOT EXISTS "COMPETENCIA" TEXT;'))
-                except:
-                    pass
+                except: pass
 
             with engine.begin() as conn:
                 if tipo_base == 'faturamento':
