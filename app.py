@@ -46,111 +46,123 @@ def _find_column(df, candidates):
         if cand.upper() in cols_upper: return cols_upper[cand.upper()]
     return None
 
+# =====================================================================
+# PARSERS E EXTRATORES DE DADOS (VARREDURA ABSOLUTA)
+# =====================================================================
 def parse_financial_value(series):
     s = series.astype(str).str.strip().str.upper().str.replace('R$', '', regex=False).str.replace(' ', '', regex=False)
-    mask_br = s.str.contains(',') & s.str.contains('\.')
-    s = np.where(mask_br, s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False), s)
-    mask_comma = s.str.contains(',') & ~s.str.contains('\.')
-    s = np.where(mask_comma, s.str.replace(',', '.', regex=False), s)
-    return pd.to_numeric(s, errors='coerce').fillna(0)
+    mask_br = s.str.contains(',', regex=False) & s.str.contains(r'\.', regex=True)
+    s.loc[mask_br] = s.loc[mask_br].str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    mask_comma = s.str.contains(',', regex=False) & ~s.str.contains(r'\.', regex=True)
+    s.loc[mask_comma] = s.loc[mask_comma].str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce').fillna(0.0)
 
-# --- FAREJADOR BLINDADO (Com Lotes, Zeros à Esquerda e Cruzamento) ---
+def parse_quantity(series):
+    s = series.astype(str).str.strip()
+    s = s.replace(['nan', 'None', 'NaN', '<NA>', 'nat', 'NaT', ''], '0')
+    s = s.str.split('.').str[0].str.split(',').str[0]
+    s = s.str.replace(r'\D', '', regex=True)
+    s = s.replace('', '0')
+    return pd.to_numeric(s, errors='coerce').fillna(0).astype(int)
+
+def format_dataframe_types(df):
+    for col in df.columns:
+        c_upper = str(col).upper()
+        if any(x in c_upper for x in ["VALOR", "VLR", "CUSTO", "PRECO"]):
+            df[col] = parse_financial_value(df[col])
+        elif any(x in c_upper for x in ["QTD", "QUANTIDADE", "QUANT"]):
+            df[col] = parse_quantity(df[col])
+        else:
+            s = df[col].astype(str).str.strip()
+            s = s.replace(['nan', 'None', 'NaN', '<NA>', 'nat', 'NaT'], '')
+            s = s.str.replace(r'\.0$', '', regex=True)
+            df[col] = s
+    return df
+
+def get_clean_col(df, candidates):
+    res = pd.Series("", index=df.index)
+    for cand in candidates:
+        c = _find_column(df, [cand])
+        if c:
+            temp = df[c].astype(str).str.strip()
+            invalid = temp.str.lower().isin(["", "nan", "none", "null", "nat", "<na>"])
+            mask = (res == "") & (~invalid)
+            res.loc[mask] = temp.loc[mask]
+    return res
+
+# --- FAREJADOR BLINDADO (Caça CNPJ e Nomes em todas as colunas possíveis) ---
 def ler_e_filtrar_faturamento(engine, comp_list, f):
     prestadores_encontrados = []
     nomes_encontrados = []
-    cnpj_formatado = re.sub(r'\D', '', str(f.get('cnpj_alvo', ''))).lstrip('0')
-    nome_alvo = str(f.get('cnpj_alvo', '')).strip().upper()
+    
+    cnpj_raw = str(f.get('cnpj_alvo', '')).strip()
+    cnpj_formatado = re.sub(r'\D', '', cnpj_raw).lstrip('0')
+    nome_alvo = cnpj_raw.upper()
 
+    # Tenta achar na base de prestadores primeiro
     try:
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
             df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
             if not df_pre_temp.empty:
-                col_cnpj_pre = _find_column(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR"])
-                col_nome_pre = _find_column(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA"])
-                
-                if col_cnpj_pre:
-                    df_pre_temp['CNPJ_LIMPO'] = df_pre_temp[col_cnpj_pre].fillna("").astype(str).str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                if col_nome_pre:
-                    df_pre_temp['NOME_LIMPO'] = df_pre_temp[col_nome_pre].fillna("").astype(str).str.upper()
+                c_cnpj = get_clean_col(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR", "CGC"])
+                df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                c_nome = get_clean_col(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA", "NOME"])
+                df_pre_temp['NOME_LIMPO'] = c_nome.str.upper()
 
-                if f['busca_por'] == 'CNPJ' and col_cnpj_pre:
-                    mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
-                elif f['busca_por'] != 'CNPJ':
-                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if col_nome_pre else pd.Series(False, index=df_pre_temp.index)
-                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if col_cnpj_pre else pd.Series(False, index=df_pre_temp.index)
+                if f['busca_por'] == 'CNPJ':
+                    if cnpj_formatado:
+                        mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                        prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
+                else:
+                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=df_pre_temp.index)
+                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=df_pre_temp.index)
                     prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
-                    if col_nome_pre:
-                        nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
+                    nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
     except: pass
 
     format_strings = ','.join([f"'{c}'" for c in comp_list])
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
+    # Busca em Lotes para não travar o servidor
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
         
-        chunk["CNPJ_FILTRO"] = ""
-        for cand in ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CGCCPF", "CPFCNPJ"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["CNPJ_FILTRO"] == ""
-                chunk.loc[mask, "CNPJ_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
-        chunk['CNPJ_LIMPO'] = chunk['CNPJ_FILTRO'].str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+        # Filtro de UF
+        if f['tipo_neg'] in ['ESTADO', 'MISTO'] and f['uf_alvo']:
+            uf_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["UF", "ESTADO", "FILIAL"])]
+            mask_uf = pd.Series(False, index=chunk.index)
+            uf_target = str(f['uf_alvo']).strip().upper()
+            for col in uf_cols:
+                mask_uf = mask_uf | chunk[col].fillna("").astype(str).str.upper().str.contains(uf_target, regex=False)
+            chunk = chunk[mask_uf]
 
-        chunk["NOME_FILTRO"] = ""
-        for cand in ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["NOME_FILTRO"] == ""
-                chunk.loc[mask, "NOME_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str).str.upper()
-
-        chunk["UF_FILTRO"] = ""
-        for cand in ["UF", "ESTADO", "UF_PRESTADOR", "FILIALBENEFICIARIO", "FILIAL_EXECUTOR", "FILIAL"]:
-            c = _find_column(chunk, [cand])
-            if c:
-                mask = chunk["UF_FILTRO"] == ""
-                chunk.loc[mask, "UF_FILTRO"] = chunk.loc[mask, c].fillna("").astype(str)
-
-        if f['tipo_neg'] == 'ESTADO' and f['uf_alvo']:
-            chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
+        # Filtro de CNPJ/NOME - Varredura em todas as colunas suspeitas
+        if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
+            target_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["PRESTADOR", "NOME", "CNPJ", "CPF", "EXEC", "CGC", "RAZAO", "FANTASIA"])]
+            mask_alvo = pd.Series(False, index=chunk.index)
             
-        elif f['tipo_neg'] == 'DIFERENCIADA' and f['cnpj_alvo']:
-            if prestadores_encontrados or nomes_encontrados:
-                mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
-                mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
-                mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
-            else:
-                if f['busca_por'] == 'CNPJ': 
-                    chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
-                else:
-                    mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                    mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    chunk = chunk[mask_nome | mask_cnpj]
-                
-        elif f['tipo_neg'] == 'MISTO':
-            if f['uf_alvo']: 
-                chunk = chunk[chunk['UF_FILTRO'].str.upper().str.contains(f['uf_alvo'].upper(), na=False)]
-            if f['cnpj_alvo']:
-                if prestadores_encontrados or nomes_encontrados:
-                    mask_pre_cnpj = chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
-                    mask_pre_nome = chunk['NOME_FILTRO'].isin(nomes_encontrados)
-                    mask_direta_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                    mask_direta_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                    chunk = chunk[mask_pre_cnpj | mask_pre_nome | mask_direta_cnpj | mask_direta_nome]
-                else:
-                    if f['busca_por'] == 'CNPJ': 
-                        chunk = chunk[chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)]
-                    else:
-                        mask_nome = chunk['NOME_FILTRO'].str.contains(nome_alvo, na=False)
-                        mask_cnpj = chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                        chunk = chunk[mask_nome | mask_cnpj]
-        
+            for col in target_cols:
+                s_col = chunk[col].fillna("").astype(str).str.upper()
+                mask_alvo = mask_alvo | s_col.str.contains(nome_alvo, regex=False)
+                if cnpj_formatado:
+                    s_digits = s_col.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    mask_alvo = mask_alvo | (s_digits == cnpj_formatado) | s_digits.str.contains(cnpj_formatado, regex=False)
+                    
+            if prestadores_encontrados:
+                for col in target_cols:
+                    s_col = chunk[col].fillna("").astype(str).str.upper()
+                    s_digits = s_col.str.replace(r'\.0$', '', regex=True).str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    mask_alvo = mask_alvo | s_digits.isin(prestadores_encontrados)
+            if nomes_encontrados:
+                for col in target_cols:
+                    s_col = chunk[col].fillna("").astype(str).str.upper()
+                    mask_alvo = mask_alvo | s_col.isin(nomes_encontrados)
+
+            chunk = chunk[mask_alvo]
+
         if not chunk.empty:
             df_list.append(chunk)
-            
+
     if df_list:
         return pd.concat(df_list, ignore_index=True)
     return pd.DataFrame()
@@ -163,8 +175,8 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
         grau_col = _find_column(df, ["DESCRICAO_GRAU", "GRAU"])
         
-        df["DESCRICAO_EVENTO"] = df[ds_col].fillna("").astype(str) if ds_col else ""
-        df["_COD_LIMPO_"] = df[ev_col].fillna("").astype(str).apply(normalize_id_digits) if ev_col else ""
+        df["DESCRICAO_EVENTO"] = get_clean_col(df, [ds_col]) if ds_col else ""
+        df["_COD_LIMPO_"] = get_clean_col(df, [ev_col]).apply(normalize_id_digits) if ev_col else ""
         
         df["ORIGEM_INICIAL"] = "Pendente"
         mask = (df["ORIGEM_INICIAL"] == "Pendente")
@@ -175,7 +187,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
             d_ds = _find_column(df_d, ["DESC_EVENTO", "DESCRICAO"])
             
             df["CHAVE"] = df["_COD_LIMPO_"] + "-" + df["DESCRICAO_EVENTO"].apply(_limpar_texto_chave)
-            df_d["CHAVE_DOT"] = df_d[d_ev].fillna("").astype(str).apply(normalize_id_digits) + "-" + df_d[d_ds].fillna("").astype(str).apply(_limpar_texto_chave)
+            df_d["CHAVE_DOT"] = get_clean_col(df_d, [d_ev]).apply(normalize_id_digits) + "-" + get_clean_col(df_d, [d_ds]).apply(_limpar_texto_chave)
             dot_keys = set(df_d["CHAVE_DOT"].unique())
             df.loc[mask, "ORIGEM_INICIAL"] = np.where(df.loc[mask, "CHAVE"].isin(dot_keys), "Dotação", "Faixa de Eventos")
         else: 
@@ -184,13 +196,14 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         def get_ref_codes(rdf, is_dieta=False):
             if rdf is None or rdf.empty: return set()
             c = _find_column(rdf, ["ESTRUTURA", "CODIGO", "EVENTOS"]) if is_dieta else _find_column(rdf, ["EVENTOS", "EVENTO", "ESTRUTURA"])
-            return set(rdf[c or rdf.columns[0]].fillna("").astype(str).apply(normalize_id_digits).unique())
+            return set(get_clean_col(rdf, [c]).apply(normalize_id_digits).unique())
 
         s_perf, s_diet = get_ref_codes(df_mat), get_ref_codes(df_die, True)
         
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPESA", "GRUPO"])
         if t_col:
-            df["TIPO_DESPESA_FINAL"] = df[t_col].fillna("OUTROS").astype(str).str.upper().str.strip()
+            df["TIPO_DESPESA_FINAL"] = get_clean_col(df, [t_col]).str.upper().str.strip()
+            df.loc[df["TIPO_DESPESA_FINAL"] == "", "TIPO_DESPESA_FINAL"] = "OUTROS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIÁRIAS"
@@ -203,7 +216,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
             df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
         
         if grau_col:
-            mask_anestesista = df[grau_col].fillna("").astype(str).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
+            mask_anestesista = get_clean_col(df, [grau_col]).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
             df.loc[mask_anestesista, "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
 
         df.loc[df["_COD_LIMPO_"].isin(s_diet) & (df["_COD_LIMPO_"] != ""), "TIPO_DESPESA_FINAL"] = "DIETAS"
@@ -215,17 +228,17 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_fai, df_pre):
         return pd.DataFrame()
 
 # =====================================================================
-# CLASSE DO GERADOR DE PDF
+# CLASSE DO GERADOR DE PDF OFICIAL
 # =====================================================================
 class ReajustePDF(FPDF):
     def header(self):
-        if os.path.exists("Logo_Postal-03.png"):
-            self.image("Logo_Postal-03.png", 10, 8, 35)
         self.set_text_color(18, 40, 63)
-        self.set_font("Arial", "B", 16)
-        self.cell(0, 10, "Relatorio de Impacto de Reajuste", 0, 1, "R")
-        self.set_text_color(0, 0, 0)
-        self.ln(10)
+        self.set_font("Arial", "B", 18)
+        self.cell(0, 10, "POSTAL SAUDE", 0, 1, "L")
+        self.set_font("Arial", "B", 14)
+        self.set_text_color(100, 100, 100)
+        self.cell(0, 8, "Relatorio de Impacto de Reajuste", 0, 1, "L")
+        self.ln(5)
 
     def footer(self):
         self.set_y(-15)
@@ -239,8 +252,10 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     
     pdf.set_font("Arial", "B", 11)
     pdf.set_fill_color(245, 245, 245)
+    pdf.set_text_color(18, 40, 63)
     pdf.cell(0, 8, "  DADOS DO PROCESSO", 0, 1, "L", fill=True)
     pdf.set_font("Arial", "", 10)
+    pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 7, f"Competencia(s) Analisada(s): {', '.join(data.get('comp_list', []))}", 0, 1, "L")
     pdf.cell(0, 7, f"Modo de Aplicacao: {data.get('modo_aplicacao', 'POR TIPO')}", 0, 1, "L")
     pdf.cell(0, 7, f"IPCA do Periodo: {data.get('ipca', '0,00')}%", 0, 1, "L")
@@ -368,7 +383,6 @@ CSS_PADRAO = """
     .sidebar { width: 280px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; }
     .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
     
-    .logo-img { max-width: 200px; height: auto; object-fit: contain; margin-bottom: 10px; }
     .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 15px; }
     .sidebar-section h4 { color: var(--azul-postal); margin: 0 0 10px 0; font-size: 1em; }
     
@@ -462,10 +476,10 @@ CSS_PADRAO = """
         var divTipo = document.getElementById('div_por_tipo');
         var divLinear = document.getElementById('div_linear');
         if (modo === 'LINEAR') {
-            divTipo.style.display = 'none';
+            if (divTipo) divTipo.style.display = 'none';
             if (divLinear) divLinear.style.display = 'block';
         } else {
-            divTipo.style.display = 'block';
+            if (divTipo) divTipo.style.display = 'block';
             if (divLinear) divLinear.style.display = 'none';
         }
     }
@@ -480,7 +494,9 @@ CSS_PADRAO = """
 HTML_DASHBOARD = CSS_PADRAO + """
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
-        <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
+        <h2 style="color: var(--azul-postal); margin: 0 0 20px 0; border-bottom: 2px solid var(--amarelo-postal); padding-bottom: 10px;">
+            <span style="color: var(--amarelo-postal);">POSTAL</span> SAÚDE
+        </h2>
         
         <div class="sidebar-section">
             <h4>Configurações para reajustar</h4>
@@ -532,7 +548,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
 
     <div class="main-content">
         <div class="header">
-            <h2>Sistema de reajuste de discussão</h2>
+            <h2 style="margin:0; color: var(--azul-postal);">Sistema de Análise e Reajuste</h2>
             <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Gerenciar Banco de Dados</a>
         </div>
 
@@ -758,7 +774,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
 """
 
 # =====================================================================
-# HTML ADMIN (RESTAURADO PARA O PADRÃO ORIGINAL)
+# HTML ADMIN
 # =====================================================================
 HTML_ADMIN = """
 <!DOCTYPE html>
@@ -770,7 +786,6 @@ HTML_ADMIN = """
         :root { --azul-postal: #002c52; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #eef2f5; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; }
         .header { background-color: white; padding: 20px 40px; display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid var(--amarelo-postal); box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
-        .logo-img { height: 60px; object-fit: contain; }
         .container { padding: 30px 40px; max-width: 1200px; margin: 0 auto; }
         .card { background: white; padding: 25px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .form-group { margin-bottom: 15px; }
@@ -792,8 +807,7 @@ HTML_ADMIN = """
 <body>
 <div class="header">
     <div style="display: flex; align-items: center; gap: 20px;">
-        <img src="/Logo_Postal-03.png" class="logo-img" alt="Postal Saúde">
-        <h2 style="margin:0; color: var(--azul-postal);">Administração de Banco de Dados</h2>
+        <h2 style="margin:0; color: var(--azul-postal);"><span style="color: var(--amarelo-postal);">POSTAL</span> SAÚDE | Administração de BD</h2>
     </div>
     <a href="/" class="btn">Voltar ao Dashboard</a>
 </div>
@@ -931,11 +945,19 @@ def aplicar_reajustes_simulados(df_cruzado, f):
     if df_cruzado.empty: return df_cruzado
         
     df = df_cruzado.copy()
-    v_col = _find_column(df, [COL_VALOR_PAGO, 'VALOR_PAG', 'VALOR_PAGO', 'VALOR', 'VALORPAGOUNIT', 'VALORAPRESENTADOUNIT', 'VALOR_APRES'])
-    if not v_col: return df
-
-    df['VALOR_BASE'] = parse_financial_value(df[v_col])
     
+    # EXTRATOR ABSOLUTO DE VALORES FINANCEIROS
+    df['VALOR_BASE'] = 0.0
+    val_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['VALOR_PAG', 'VALOR_PAGO', 'VALORPAGOUNIT', 'VALOR_APRES', 'VALORAPRESENTADOUNIT', 'VALOR', 'VLR', 'CUSTO'])]
+    
+    max_sum = -1
+    for vc in val_cols:
+        temp_val = parse_financial_value(df[vc])
+        temp_sum = temp_val.sum()
+        if temp_sum > max_sum:
+            max_sum = temp_sum
+            df['VALOR_BASE'] = temp_val
+
     codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(';') if x.strip()]
     if not codigos_excecao: 
         codigos_excecao = [normalize_id_digits(x) for x in f['itens_exc'].split(',') if x.strip()]
@@ -1004,10 +1026,6 @@ def processa_filtros_request(req):
 # ROTAS FLASK
 # =====================================================================
 
-@app.route('/Logo_Postal-03.png')
-def serve_logo():
-    return send_from_directory(os.getcwd(), 'Logo_Postal-03.png')
-
 @app.route('/')
 def dashboard():
     f = processa_filtros_request(request)
@@ -1023,8 +1041,7 @@ def dashboard():
         try:
             with engine.connect() as conn:
                 res = conn.execute(text("SELECT DISTINCT \"COMPETENCIA\" FROM faturamento ORDER BY \"COMPETENCIA\" DESC"))
-                # Pula os fantasmas na tela principal
-                comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip() not in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']]
+                comps_disponiveis = [r[0] for r in res if r[0] and str(r[0]).strip().lower() not in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']]
         except: pass
     
     if step in ['1', '2'] and f['comp_list'] and engine:
@@ -1184,7 +1201,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or str(c_name).strip() in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
+                        if not c_name or str(c_name).strip().lower() in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1234,7 +1251,7 @@ def admin_upload():
             
             if arquivo.filename.endswith('.parquet'): 
                 df = pd.read_parquet(arquivo)
-                df = df.astype(str).replace({'nan': '', 'None': '', 'NaN': '', '<NA>': ''})
+                df = format_dataframe_types(df)
             elif arquivo.filename.endswith('.csv') or arquivo.filename.endswith('.txt'):
                 amostra = arquivo.read(2048).decode('utf-8', errors='ignore')
                 arquivo.seek(0)
@@ -1243,22 +1260,23 @@ def admin_upload():
                 except: 
                     arquivo.seek(0)
                     df = pd.read_csv(arquivo, sep=delimitador, engine='python', encoding='iso-8859-1', on_bad_lines='skip', dtype=str, keep_default_na=False)
+                df = format_dataframe_types(df)
             elif arquivo.filename.endswith('.xlsx'): 
                 df = pd.read_excel(arquivo, dtype=str)
-                df = df.fillna('')
+                df = format_dataframe_types(df)
             else: continue
 
             if df.empty: continue
+            
             for col in ['UF', 'AP', 'CNPJ']:
-                if col not in df.columns: df[col] = None
+                if col not in df.columns: df[col] = ""
             
             if tipo_base == 'faturamento':
                 comp_final = competencia if competencia else nome_arquivo_puro
                 df['COMPETENCIA'] = str(comp_final).strip()
 
             if 'VLR_DESCONTO_OBTIDO' in df.columns:
-                df['VLR_DESCONTO_OBTIDO'] = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0)
-                tot = df['VLR_DESCONTO_OBTIDO'].sum()
+                tot = pd.to_numeric(df['VLR_DESCONTO_OBTIDO'], errors='coerce').fillna(0).sum()
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
@@ -1278,6 +1296,6 @@ def admin_upload():
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Base perfeitamente tipada e limpa!", "success")
     except Exception as e: flash(f"Erro crítico no processamento: {str(e)}", "error")
     return redirect(url_for('admin'))
