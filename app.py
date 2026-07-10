@@ -309,8 +309,8 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
         pdf.set_font("Arial", "B", 9)
         pdf.cell(75, 8, " Grupo de Despesa", 1, 0, "L", fill=True)
         pdf.cell(38, 8, "Base Lida", 1, 0, "C", fill=True)
-        pdf.cell(38, 8, "Solicitado", 1, 0, "C", fill=True)
-        pdf.cell(38, 8, "Concedido", 1, 1, "C", fill=True)
+        pdf.cell(38, 8, "Reajuste Sol.", 1, 0, "C", fill=True)
+        pdf.cell(38, 8, "Reajuste Conc.", 1, 1, "C", fill=True)
         
         pdf.set_text_color(0, 0, 0)
         pdf.set_font("Arial", "", 8)
@@ -329,7 +329,7 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     if pdf.get_y() > 200: pdf.add_page()
     pdf.set_font("Arial", "B", 12)
     pdf.set_text_color(18, 40, 63)
-    pdf.cell(0, 10, "RESUMO FINANCEIRO", "B", 1, "L")
+    pdf.cell(0, 10, "RESUMO FINANCEIRO (IMPACTO)", "B", 1, "L")
     pdf.ln(2)
     
     pdf.set_text_color(0, 0, 0)
@@ -342,9 +342,9 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
 
     pdf.cell(100, 8, "Faturamento Total Lido (Base):", 0, 0)
     pdf.cell(0, 8, f"R$ {fat_total:,.2f}", 0, 1, "R")
-    pdf.cell(100, 8, "Total do Reajuste Solicitado:", 0, 0)
+    pdf.cell(100, 8, "Valor do Reajuste Solicitado:", 0, 0)
     pdf.cell(0, 8, f"R$ {sol_total:,.2f}", 0, 1, "R")
-    pdf.cell(100, 8, "Total do Reajuste Concedido:", 0, 0)
+    pdf.cell(100, 8, "Valor do Reajuste Concedido:", 0, 0)
     pdf.cell(0, 8, f"R$ {conc_total:,.2f}", 0, 1, "R")
     
     pdf.set_font("Arial", "B", 11)
@@ -517,6 +517,7 @@ CSS_PADRAO = """
 """
 
 HTML_DASHBOARD = CSS_PADRAO + """
+<!-- SIDEBAR (MENU LATERAL) -->
 <form action="/" method="get" id="mainForm" style="display: contents;">
     <div class="sidebar">
         <h2 style="color: var(--azul-postal); margin: 0 0 20px 0; border-bottom: 2px solid var(--amarelo-postal); padding-bottom: 10px;">
@@ -579,12 +580,14 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </div>
         
         <div style="flex-grow: 1;"></div>
+        <!-- FASE 1: Carregar os Dados -->
         <button type="submit" name="step" value="1" class="btn" style="background-color: var(--amarelo-postal); color: var(--azul-postal); width: 100%; font-size: 1.1em; padding: 12px; margin-top: 10px;">Carregar e Cruzar Bases</button>
     </div>
 
+    <!-- MAIN CONTENT -->
     <div class="main-content">
         <div class="header">
-            <h2 style="margin:0; color: var(--azul-postal);">Sistema de Análise e Reajuste</h2>
+            <h2 style="margin:0; color: var(--azul-postal);">Sistema de Análise e Reajuste - JPMS</h2>
             <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Gerenciar Banco de Dados</a>
         </div>
 
@@ -751,14 +754,14 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         <div class="sub">{{ totais.linhas_faturamento }} linhas</div>
                     </div>
                     <div class="metric-box">
-                        <h4>Total Solicitado</h4>
+                        <h4>Reajuste Solicitado</h4>
                         <div class="valor" style="color: var(--azul-claro);">R$ {{ totais.total_solicitado }}</div>
-                        <div class="sub">Pós-regras (Sol.)</div>
+                        <div class="sub">Impacto Financeiro (Sol.)</div>
                     </div>
                     <div class="metric-box">
-                        <h4>Total Concedido</h4>
+                        <h4>Reajuste Concedido</h4>
                         <div class="valor" style="color: var(--verde-ok);">R$ {{ totais.total_concedido }}</div>
-                        <div class="sub">Pós-regras (Conc.)</div>
+                        <div class="sub">Impacto Financeiro (Conc.)</div>
                     </div>
                     <div class="metric-box impacto-card">
                         <h4>Custo Evitado</h4>
@@ -777,8 +780,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
                             <th>Origem do Cálculo</th>
                             <th>Itens</th>
                             <th>Base Lida (R$)</th>
-                            <th>Solicitado (R$)</th>
-                            <th>Concedido (R$)</th>
+                            <th>Reajuste Sol. (R$)</th>
+                            <th>Reajuste Conc. (R$)</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -974,14 +977,13 @@ HTML_ADMIN = """
 """
 
 # =====================================================================
-# AUXILIARES DE CÁLCULO FINANCEIRO (MÁXIMA PRECISÃO)
+# AUXILIARES DE CÁLCULO FINANCEIRO (MÁXIMA PRECISÃO E CÁLCULO DE DELTA)
 # =====================================================================
 def aplicar_reajustes_simulados(df_cruzado, f):
     if df_cruzado.empty: return df_cruzado
         
     df = df_cruzado.copy()
     
-    # PEGA AUTOMATICAMENTE A COLUNA FINANCEIRA COM MAIOR VALOR REAL
     df['VALOR_BASE'] = 0.0
     val_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['VALOR_PAG', 'VALOR_PAGO', 'VALORPAGOUNIT', 'VALOR_APRES', 'VALORAPRESENTADOUNIT', 'VALOR', 'VLR', 'CUSTO'])]
     
@@ -1025,8 +1027,9 @@ def aplicar_reajustes_simulados(df_cruzado, f):
             df.loc[mask_exc, 'TAXA_SOLICITADA'] = f['sol_exc']
             df.loc[mask_exc, 'TAXA_CONCEDIDA'] = f['conc_exc']
 
-    df['VALOR_SOLICITADO'] = df['VALOR_BASE'] * (1 + (df['TAXA_SOLICITADA'] / 100))
-    df['VALOR_CONCEDIDO'] = df['VALOR_BASE'] * (1 + (df['TAXA_CONCEDIDA'] / 100))
+    # AGORA CALCULA O DELTA: SE O PERCENTUAL FOR 0, O VALOR FICA 0,00!
+    df['VALOR_SOLICITADO'] = df['VALOR_BASE'] * (df['TAXA_SOLICITADA'] / 100.0)
+    df['VALOR_CONCEDIDO'] = df['VALOR_BASE'] * (df['TAXA_CONCEDIDA'] / 100.0)
     df['CUSTO_EVITADO'] = df['VALOR_SOLICITADO'] - df['VALOR_CONCEDIDO']
     
     return df
@@ -1324,6 +1327,6 @@ def admin_upload():
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Base perfeitamente tipada e limpa!", "success")
     except Exception as e: flash(f"Erro crítico no processamento: {str(e)}", "error")
     return redirect(url_for('admin'))
