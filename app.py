@@ -66,7 +66,6 @@ def parse_quantity(series):
     return pd.to_numeric(s, errors='coerce').fillna(0).astype(int)
 
 def format_dataframe_types(df):
-    """ Garante que os dados entrem no banco com a tipagem perfeita """
     for col in df.columns:
         c_upper = str(col).upper()
         if any(x in c_upper for x in ["VALOR", "VLR", "CUSTO", "PRECO", "PAG", "APRES", "GLOS", "UNIT"]):
@@ -100,59 +99,60 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
     cnpj_formatado = re.sub(r'\D', '', cnpj_raw).lstrip('0')
     nome_alvo = cnpj_raw.upper()
 
-    try:
-        if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
-            df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
-            if not df_pre_temp.empty:
-                c_cnpj = get_clean_col(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR", "CGC"])
-                df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\D', '', regex=True).str.lstrip('0')
-                c_nome = get_clean_col(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA", "NOME"])
-                df_pre_temp['NOME_LIMPO'] = c_nome.str.upper()
+    # Só tenta cruzar prestador se o modo for COMPLETO
+    if f.get('modo_cruzamento') == 'COMPLETO':
+        try:
+            if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
+                df_pre_temp = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
+                if not df_pre_temp.empty:
+                    c_cnpj = get_clean_col(df_pre_temp, ["CPFCNPJ", "CNPJ", "CGCCPF", "PRESTADOR", "CGC"])
+                    df_pre_temp['CNPJ_LIMPO'] = c_cnpj.str.replace(r'\D', '', regex=True).str.lstrip('0')
+                    c_nome = get_clean_col(df_pre_temp, ["NOM", "NOME_FANTASIA", "RAZAO_SOCIAL", "NOMEPRESTADOR", "FANTASIA", "NOME"])
+                    df_pre_temp['NOME_LIMPO'] = c_nome.str.upper()
 
-                if f['busca_por'] == 'CNPJ':
-                    if cnpj_formatado:
-                        mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
-                        prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
-                else:
-                    mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=df_pre_temp.index)
-                    mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=df_pre_temp.index)
-                    prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
-                    nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
-    except: pass
+                    if f['busca_por'] == 'CNPJ':
+                        if cnpj_formatado:
+                            mask = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False)
+                            prestadores_encontrados = df_pre_temp.loc[mask, 'CNPJ_LIMPO'].unique().tolist()
+                    else:
+                        mask_n = df_pre_temp['NOME_LIMPO'].str.contains(nome_alvo, na=False) if nome_alvo else pd.Series(False, index=df_pre_temp.index)
+                        mask_c = df_pre_temp['CNPJ_LIMPO'].str.contains(cnpj_formatado, na=False) if cnpj_formatado else pd.Series(False, index=df_pre_temp.index)
+                        prestadores_encontrados = df_pre_temp.loc[mask_n | mask_c, 'CNPJ_LIMPO'].unique().tolist()
+                        nomes_encontrados = df_pre_temp.loc[mask_n | mask_c, 'NOME_LIMPO'].unique().tolist()
+        except: pass
 
     format_strings = ','.join([f"'{c}'" for c in comp_list])
     sql = f"SELECT * FROM faturamento WHERE \"COMPETENCIA\" IN ({format_strings})"
     
     df_list = []
     for chunk in pd.read_sql(text(sql), con=engine, chunksize=100000):
+        # Prepara a base do chunk
+        target_cols_cnpj = ["PRESTADOR", "CNPJ_EXECUTOR", "CNPJ", "CPF", "EXEC", "CGC"]
+        chunk['CNPJ_LIMPO'] = get_clean_col(chunk, target_cols_cnpj).str.replace(r'\D', '', regex=True).str.lstrip('0')
+        
+        target_cols_nome = ["NOME_FANTASIA_PRESTADOR", "NOMEPRESTADOR", "RAZAO_SOCIAL", "NOME_FANTASIA", "PRESTADOR_NOME", "EXECUTOR", "NOME"]
+        chunk["NOME_FILTRO"] = get_clean_col(chunk, target_cols_nome).str.upper()
+
+        chunk["UF_FILTRO"] = get_clean_col(chunk, ["UF", "ESTADO", "FILIAL"]).str.upper()
+
         # Filtro Regional
         if f['tipo_neg'] in ['ESTADO', 'MISTO'] and f['uf_alvo']:
-            uf_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["UF", "ESTADO", "FILIAL"])]
-            mask_uf = pd.Series(False, index=chunk.index)
-            uf_target = str(f['uf_alvo']).strip().upper()
-            for col in uf_cols:
-                mask_uf = mask_uf | chunk[col].fillna("").astype(str).str.upper().str.contains(uf_target, regex=False)
-            chunk = chunk[mask_uf]
+            chunk = chunk[chunk['UF_FILTRO'].str.contains(str(f['uf_alvo']).strip().upper(), na=False)]
 
         # Filtro por CNPJ / Grupo
         if f['tipo_neg'] in ['DIFERENCIADA', 'MISTO'] and f['cnpj_alvo']:
-            target_cols = [c for c in chunk.columns if any(x in str(c).upper() for x in ["PRESTADOR", "NOME", "CNPJ", "CPF", "EXEC", "CGC", "RAZAO", "FANTASIA"])]
             mask_alvo = pd.Series(False, index=chunk.index)
             
-            for col in target_cols:
-                s_col = chunk[col].fillna("").astype(str).str.upper()
-                mask_alvo = mask_alvo | s_col.str.contains(nome_alvo, regex=False)
-                if cnpj_formatado:
-                    s_digits = s_col.str.replace(r'\D', '', regex=True).str.lstrip('0')
-                    mask_alvo = mask_alvo | (s_digits == cnpj_formatado) | s_digits.str.contains(cnpj_formatado, regex=False)
+            # Busca Direta no Faturamento
+            mask_alvo = mask_alvo | chunk['NOME_FILTRO'].str.contains(nome_alvo, regex=False)
+            if cnpj_formatado:
+                mask_alvo = mask_alvo | (chunk['CNPJ_LIMPO'] == cnpj_formatado) | chunk['CNPJ_LIMPO'].str.contains(cnpj_formatado, regex=False)
                     
+            # Busca pela tabela de Prestadores (Se Modo Completo estiver ativo)
             if prestadores_encontrados:
-                for col in target_cols:
-                    s_digits = chunk[col].fillna("").astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-                    mask_alvo = mask_alvo | s_digits.isin(prestadores_encontrados)
+                mask_alvo = mask_alvo | chunk['CNPJ_LIMPO'].isin(prestadores_encontrados)
             if nomes_encontrados:
-                for col in target_cols:
-                    mask_alvo = mask_alvo | chunk[col].fillna("").astype(str).str.upper().isin(nomes_encontrados)
+                mask_alvo = mask_alvo | chunk['NOME_FILTRO'].isin(nomes_encontrados)
 
             chunk = chunk[mask_alvo]
 
@@ -163,17 +163,45 @@ def ler_e_filtrar_faturamento(engine, comp_list, f):
         return pd.concat(df_list, ignore_index=True)
     return pd.DataFrame()
 
-# LÓGICA REVERSA: O QUE NÃO ACHAR EM DOTAÇÃO VIRA FAIXA DE EVENTOS AUTOMATICAMENTE
-def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre):
+
+def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f):
     try:
         df = df_fat.copy()
         
         ev_col = _find_column(df, [COL_EVENTO, "EVENTO", "COD_EVENTO", "ESTRUTURA", "CODIGO"])
-        ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
-        grau_col = _find_column(df, ["DESCRICAO_GRAU", "GRAU"])
-        
-        df["DESCRICAO_EVENTO"] = get_clean_col(df, [ds_col]) if ds_col else ""
         df["_COD_LIMPO_"] = get_clean_col(df, [ev_col]).apply(normalize_id_digits) if ev_col else ""
+        
+        # =================================================================
+        # MODO BYPASS: RÁPIDO E DIRETO (APENAS FATURAMENTO)
+        # =================================================================
+        if f.get('modo_cruzamento', 'SIMPLES') == 'SIMPLES':
+            df["ORIGEM_INICIAL"] = "Faixa de Eventos" # Joga tudo para a aba Faixa para simplificar
+            
+            t_col = _find_column(df, ["TIPODESPESA", "TIPO_DESPESA", "TIPO", "GRUPO", "TIPO_DESPESA_FINAL", "CATEGORIA"])
+            if t_col:
+                s_tipo = get_clean_col(df, [t_col]).str.upper().str.strip()
+                df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
+                df.loc[s_tipo.str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
+                df.loc[s_tipo.str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
+                df.loc[s_tipo.str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIÁRIAS"
+                df.loc[s_tipo.str.contains("TAXA", na=False), "TIPO_DESPESA_FINAL"] = "TAXAS"
+                df.loc[s_tipo.str.contains("GASES", na=False), "TIPO_DESPESA_FINAL"] = "GASES MEDICINAIS"
+                df.loc[s_tipo.str.contains("OPME|ORTESE|PROTESE", na=False), "TIPO_DESPESA_FINAL"] = "OPME"
+                df.loc[s_tipo.str.contains("SADT|EXAME|DIAGNOSTICO|IMAGEM", na=False), "TIPO_DESPESA_FINAL"] = "SADT / EXAMES"
+                df.loc[s_tipo.str.contains("HONORARIO|CONSULTA|VISITA|MEDICO", na=False), "TIPO_DESPESA_FINAL"] = "CONSULTAS / HONORÁRIOS"
+                df.loc[s_tipo.str.contains("ANEST", na=False), "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
+                df.loc[s_tipo.str.contains("DIETA", na=False), "TIPO_DESPESA_FINAL"] = "DIETAS"
+                df.loc[s_tipo.str.contains("PERFURO", na=False), "TIPO_DESPESA_FINAL"] = "PERFUROCORTANTES"
+            else:
+                df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
+            
+            return df.drop(columns=["CHAVE"], errors="ignore")
+
+        # =================================================================
+        # MODO COMPLETO: CRUZAMENTO DE TODAS AS BASES
+        # =================================================================
+        ds_col = _find_column(df, ["DESCRICAO_EVENTO", "DESCRICAO", "EVENTO_DESC", "DESCRICAOEVENTO"])
+        df["DESCRICAO_EVENTO"] = get_clean_col(df, [ds_col]) if ds_col else ""
         
         df["ORIGEM_INICIAL"] = "Pendente"
         mask = (df["ORIGEM_INICIAL"] == "Pendente")
@@ -200,7 +228,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre):
         t_col = _find_column(df, ["TIPO_DESPESA_FINAL", "TIPODESPESA", "TIPO", "TIPO_DESPINICIAL", "GRUPO"])
         if t_col:
             df["TIPO_DESPESA_FINAL"] = get_clean_col(df, [t_col]).str.upper().str.strip()
-            df.loc[df["TIPO_DESPESA_FINAL"] == "", "TIPO_DESPESA_FINAL"] = "OUTROS"
+            df.loc[df["TIPO_DESPESA_FINAL"] == "", "TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MATERIA", na=False), "TIPO_DESPESA_FINAL"] = "MATERIAIS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("MEDICA", na=False), "TIPO_DESPESA_FINAL"] = "MEDICAMENTOS"
             df.loc[df["TIPO_DESPESA_FINAL"].str.contains("DIARIA", na=False), "TIPO_DESPESA_FINAL"] = "DIÁRIAS"
@@ -212,6 +240,7 @@ def cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre):
         else:
             df["TIPO_DESPESA_FINAL"] = "OUTROS / GERAL"
         
+        grau_col = _find_column(df, ["DESCRICAO_GRAU", "GRAU"])
         if grau_col:
             mask_anestesista = get_clean_col(df, [grau_col]).str.upper().isin(["ANESTESISTA", "AUXILIAR DE ANESTESISTA"])
             df.loc[mask_anestesista, "TIPO_DESPESA_FINAL"] = "ANESTESISTA"
@@ -254,6 +283,7 @@ def build_analysis_pdf_bytes(data: dict) -> bytes:
     pdf.set_font("Arial", "", 10)
     pdf.set_text_color(0, 0, 0)
     pdf.cell(0, 7, f"Competencia(s) Analisada(s): {', '.join(data.get('comp_list', []))}", 0, 1, "L")
+    pdf.cell(0, 7, f"Estrategia de Dados: {data.get('modo_cruzamento', 'SIMPLES')}", 0, 1, "L")
     pdf.cell(0, 7, f"Modo de Aplicacao: {data.get('modo_aplicacao', 'POR TIPO')}", 0, 1, "L")
     pdf.cell(0, 7, f"IPCA do Periodo: {data.get('ipca', '0,00')}%", 0, 1, "L")
     pdf.cell(0, 7, f"Tipo de Negociacao: {data.get('tipo_neg', 'TODOS')}", 0, 1, "L")
@@ -372,10 +402,10 @@ def obter_linhas_tabela():
 # =====================================================================
 CSS_PADRAO = """
 <style>
-    :root { --azul-postal: #002c52; --azul-claro: #005a92; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #f4f7f6; }
+    :root { --azul-postal: #002c52; --azul-claro: #005a92; --amarelo-postal: #f9b200; --verde-ok: #007a33; --vermelho-alerta: #cc0000; --fundo: #f4f7f6; --cinza-claro: #eef2f5; }
     body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--fundo); color: #333; margin: 0; display: flex; min-height: 100vh; }
     
-    .sidebar { width: 280px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; }
+    .sidebar { width: 300px; background-color: white; border-right: 1px solid #ddd; padding: 20px; display: flex; flex-direction: column; gap: 20px; box-shadow: 2px 0 5px rgba(0,0,0,0.05); z-index: 10; overflow-y: auto;}
     .main-content { flex: 1; display: flex; flex-direction: column; overflow-y: auto; }
     
     .sidebar-section { border-bottom: 1px solid #eee; padding-bottom: 15px; }
@@ -494,9 +524,20 @@ HTML_DASHBOARD = CSS_PADRAO + """
         </h2>
         
         <div class="sidebar-section">
+            <h4>Estratégia de Processamento</h4>
+            <div class="form-group">
+                <div class="radio-group" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+                    <label><input type="radio" name="modo_cruzamento" value="SIMPLES" {% if filtros.modo_cruzamento != 'COMPLETO' %}checked{% endif %}> Rápido (Apenas Faturamento)</label>
+                    <label><input type="radio" name="modo_cruzamento" value="COMPLETO" {% if filtros.modo_cruzamento == 'COMPLETO' %}checked{% endif %}> Completo (Cruzar Todas as Bases)</label>
+                </div>
+                <small style="color:#666; display:block; margin-top:5px;">O Rápido extrai os dados diretamente da base de Faturamento, ignorando cruzamentos complexos. Excelente para evitar erros de consistência nas planilhas de terceiros.</small>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
             <h4>Configurações para reajustar</h4>
             <div class="form-group">
-                <label>Modo de aplicação</label>
+                <label>Modo de aplicação de Taxas</label>
                 <div class="radio-group">
                     <label><input type="radio" name="modo_aplicacao" value="POR_TIPO" onclick="toggleModo()" {% if filtros.modo_aplicacao != 'LINEAR' %}checked{% endif %}> Por tipo</label>
                     <label><input type="radio" name="modo_aplicacao" value="LINEAR" onclick="toggleModo()" {% if filtros.modo_aplicacao == 'LINEAR' %}checked{% endif %}> Linear</label>
@@ -543,8 +584,8 @@ HTML_DASHBOARD = CSS_PADRAO + """
 
     <div class="main-content">
         <div class="header">
-            <h2>Sistema de reajuste de discussão - JPMS</h2>
-            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Administração de Banco de Dados</a>
+            <h2 style="margin:0; color: var(--azul-postal);">Sistema de Análise e Reajuste</h2>
+            <a href="/admin" class="btn" style="background:#eef2f5; color:var(--azul-postal); border:1px solid #ccc;">Gerenciar Banco de Dados</a>
         </div>
 
         <div class="container">
@@ -628,7 +669,7 @@ HTML_DASHBOARD = CSS_PADRAO + """
                         </div>
 
                         <div id="tab-faixa" class="tab-content">
-                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong> (Lógica Reversa).</p>
+                            <p style="color:#666; font-size:0.9em; margin-bottom:15px;">Itens identificados como <strong>Faixa de Eventos</strong>.</p>
                             {% for label, key in tipos_despesa %}
                             <div class="expense-row">
                                 <div class="expense-label">
@@ -940,7 +981,7 @@ def aplicar_reajustes_simulados(df_cruzado, f):
         
     df = df_cruzado.copy()
     
-    # PEGA AUTOMATICAMENTE A COLUNA FINANCEIRA COM MAIOR VALOR REAL (EVITA ERRO DE COLUNA VAZIA)
+    # PEGA AUTOMATICAMENTE A COLUNA FINANCEIRA COM MAIOR VALOR REAL
     df['VALOR_BASE'] = 0.0
     val_cols = [c for c in df.columns if any(x in str(c).upper() for x in ['VALOR_PAG', 'VALOR_PAGO', 'VALORPAGOUNIT', 'VALOR_APRES', 'VALORAPRESENTADOUNIT', 'VALOR', 'VLR', 'CUSTO'])]
     
@@ -993,6 +1034,7 @@ def aplicar_reajustes_simulados(df_cruzado, f):
 def processa_filtros_request(req):
     f = {
         'step': req.args.get('step', ''),
+        'modo_cruzamento': req.args.get('modo_cruzamento', 'SIMPLES'),
         'modo_aplicacao': req.args.get('modo_aplicacao', 'POR_TIPO'),
         'ipca': float(req.args.get('ipca', '0.00') or 0.0),
         'analista': req.args.get('analista', '').strip(),
@@ -1052,8 +1094,7 @@ def dashboard():
                 try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
                 except: df_pre = pd.DataFrame()
 
-                # CRUZA DIRETO COM DOTAÇÃO - O QUE NÃO ACHAR VIRA FAIXA NO AUTOMÁTICO
-                df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
+                df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f)
                 
                 f_calc = f.copy()
                 if step == '1':
@@ -1119,7 +1160,7 @@ def exportar():
         try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
         except: df_pre = pd.DataFrame()
         
-        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
+        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f)
         df_final = aplicar_reajustes_simulados(df_cruzado, f)
         
         output = io.BytesIO()
@@ -1145,7 +1186,7 @@ def exportar_pdf():
         try: df_pre = pd.read_sql(text("SELECT * FROM prestadores"), con=engine)
         except: df_pre = pd.DataFrame()
         
-        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre)
+        df_cruzado = cruzar_bases(df_fat, df_mat, df_die, df_dot, df_pre, f)
         df_final = aplicar_reajustes_simulados(df_cruzado, f)
         
         grupo = df_final.groupby(['TIPO_DESPESA_FINAL', 'ORIGEM_CALCULO']).agg(
@@ -1161,7 +1202,7 @@ def exportar_pdf():
 
         data_pdf = {
             'comp_list': f['comp_list'], 'uf_alvo': f['uf_alvo'], 'cnpj_alvo': f['cnpj_alvo'],
-            'busca_por': f['busca_por'], 'modo_aplicacao': f['modo_aplicacao'],
+            'busca_por': f['busca_por'], 'modo_cruzamento': f['modo_cruzamento'], 'modo_aplicacao': f['modo_aplicacao'],
             'ipca': f['ipca'], 'tipo_neg': f['tipo_neg'], 'analista': f['analista'], 'gestor': f['gestor'],
             'by_type': by_type,
             'totals': {
@@ -1190,7 +1231,7 @@ def admin():
                     res = conn.execute(text("SELECT \"COMPETENCIA\", COUNT(*) FROM faturamento GROUP BY \"COMPETENCIA\" ORDER BY \"COMPETENCIA\" DESC"))
                     for row in res: 
                         c_name = row[0]
-                        if not c_name or str(c_name).strip() in ['None', 'NaN', 'nan', '<NA>', 'SEM_COMPETENCIA', '']:
+                        if not c_name or str(c_name).strip().lower() in ['none', 'nan', 'nat', '<na>', 'sem_competencia', '']:
                             comps_fat.append({'comp': 'FANTASMA', 'nome_exibicao': 'FANTASMAS (S/ Data)', 'linhas': row[1]})
                         else:
                             comps_fat.append({'comp': c_name, 'nome_exibicao': c_name, 'linhas': row[1]})
@@ -1218,7 +1259,7 @@ def limpar_competencia():
                     flash("Arquivos fantasmas excluídos com sucesso!", "success")
                 else:
                     conn.execute(text(f"DELETE FROM faturamento WHERE \"COMPETENCIA\" = '{comp}'"))
-                    flash(f"Competência [{comp}] excluída!", "success")
+                    flash(f"Competência [{comp}] excluída cirurgicamente!", "success")
         except Exception as e: flash(f"Erro: {str(e)}", "error")
     return redirect(url_for('admin'))
 
@@ -1254,7 +1295,6 @@ def admin_upload():
 
             if df.empty: continue
             
-            # --- HIGIENIZAÇÃO DE TIPOS "FORÇA BRUTA" AQUI NA ENTRADA ---
             df = format_dataframe_types(df)
 
             for col in ['UF', 'AP', 'CNPJ']:
@@ -1269,7 +1309,6 @@ def admin_upload():
                 df['VLR_DESCONTO_OBTIDO'] = 0.0
                 df.at[df.index[0], 'VLR_DESCONTO_OBTIDO'] = tot
 
-            # Proteção Dinâmica de Transação Postgres
             if tipo_base == 'faturamento':
                 try:
                     insp = inspect(engine)
@@ -1285,6 +1324,6 @@ def admin_upload():
                     df.to_sql(tipo_base, con=conn, if_exists='replace' if primeiro else 'append', index=False, chunksize=200000)
             linhas += len(df)
             primeiro = False
-        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}]. Base perfeitamente tipada e limpa!", "success")
+        flash(f"Sucesso! {linhas} linhas gravadas em [{tipo_base}].", "success")
     except Exception as e: flash(f"Erro crítico no processamento: {str(e)}", "error")
     return redirect(url_for('admin'))
